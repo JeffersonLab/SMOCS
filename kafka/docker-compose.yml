@@ -1,0 +1,54 @@
+services:
+  kafka-broker:
+    image: apache/kafka:3.8.0
+    hostname: kafka-broker
+    container_name: kafka-broker
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka-broker:9092'
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-broker:9093'
+      KAFKA_LISTENERS: 'CONTROLLER://kafka-broker:9093,PLAINTEXT://0.0.0.0:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      CLUSTER_ID: 'test-broker'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - kafka-net
+
+  kafka-producer:
+    build:
+      context: ./kafka-producer/
+    environment:
+      KAFKA_BROKER_URL: kafka-broker:9092
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka-broker
+    restart: "no"
+    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 5 && echo 'Starting producer' && python producer.py"]
+
+  kafka-consumer:
+    build:
+      context: ./kafka-consumer/
+    environment:
+      KAFKA_BROKER_URL: kafka-broker:9092
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka-broker
+    restart: "no"
+    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 10 && echo 'Starting consumer' && python consumer.py"]
+
+networks:
+  kafka-net:
+    driver: bridge
