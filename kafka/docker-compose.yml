@@ -54,6 +54,53 @@ services:
     restart: unless-stopped
     command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 10 && echo 'Starting MQTT-Kafka producer' && python mqtt_kafka_producer.py"]
 
+  influxdb:
+    image: influxdb:1.8
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb
+    environment:
+      INFLUXDB_DB: kafka_data
+      INFLUXDB_ADMIN_USER: admin
+      INFLUXDB_ADMIN_PASSWORD: admin123
+    networks:
+      - kafka-net
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    restart: unless-stopped
+    networks:
+      - kafka-net
+
+  grafana-consumer:
+    build: ./grafana-consumer/
+    depends_on:
+      - kafka-broker
+      - influxdb
+    environment:
+      KAFKA_BROKER_URL: kafka-broker:9092
+      KAFKA_TOPIC: my-topic
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_DB: kafka_data
+      INFLUXDB_USER: admin
+      INFLUXDB_PASS: admin123
+    networks:
+      - kafka-net
+
+volumes:
+  influxdb-data:
+  grafana-storage:
+
+
+
 networks:
   kafka-net:
     driver: bridge
