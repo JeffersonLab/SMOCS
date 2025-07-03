@@ -1,44 +1,59 @@
-from kafka import KafkaConsumer
-import logging
+from kafka import KafkaConsumer, KafkaClient
+import time
 import os
+import logging
 
 logging.basicConfig(level=logging.INFO)
 
 def main():
-    broker_url = os.getenv('KAFKA_BROKER_URL', 'kafka-broker:19092')
-    
+    broker_url = os.getenv('KAFKA_BROKER_URL', 'kafka-broker:9092')
     logging.info(f"Connecting to Kafka broker at: {broker_url}")
     
+    # Wait for broker to be available
+    for i in range(10):
+        try:
+            client = KafkaClient(bootstrap_servers=[broker_url])
+            client.close()
+            logging.info("Kafka broker is available")
+            break
+        except:
+            logging.info(f"Waiting for Kafka broker... ({i+1}/10)")
+            time.sleep(5)
+    
     consumer = KafkaConsumer(
-        'mytopic',                          # Topic to subscribe to
         bootstrap_servers=[broker_url],
-        auto_offset_reset='earliest',       # Start from the beginning if no offset
-        enable_auto_commit=True,            # Automatically commit offsets
-        group_id='my-group',               # Consumer group ID
-        value_deserializer=lambda x: x.decode('utf-8') if x else None,
-        api_version=(2, 8, 0),             # Specify API version for compatibility
-        consumer_timeout_ms=1000,          # Timeout for polling
-        session_timeout_ms=30000,          # Session timeout
-        heartbeat_interval_ms=3000,        # Heartbeat interval
-        metadata_max_age_ms=30000          # Metadata refresh interval
+        auto_offset_reset='earliest',
+        enable_auto_commit=True,
+        group_id='all-topics-consumer',
+        value_deserializer=lambda m: m.decode('utf-8') if m else None,
+        api_version=(2, 8, 0),
+        metadata_max_age_ms=5000,
+        request_timeout_ms=30000
     )
     
-    logging.info("Kafka Consumer started. Listening for messages...")
+    consumer.subscribe(pattern=r'.*')  # Subscribe to all topics
+    logging.info("Subscribed to all topics")
+    
+    logging.info("Starting consumer for all topics...")
     
     try:
+        message_count = 0
+        
         for message in consumer:
-            if message.value:
-                logging.info(f'Received: {message.value} from partition {message.partition} at offset {message.offset}')
-            else:
-                logging.info("Received empty message")
-                
+            message_count += 1
+            logging.info(f"Message #{message_count} - Topic: '{message.topic}' "
+                        f"(partition {message.partition}, offset {message.offset}): "
+                        f"{message.value[:200]}{'...' if len(message.value) > 200 else ''}")
+            
     except KeyboardInterrupt:
-        logging.info("Consumer interrupted by user")
+        logging.info("Shutting down consumer...")
     except Exception as e:
-        logging.error(f"An error occurred: {e}")
+        logging.error(f"Error consuming messages: {e}")
+        import traceback
+        logging.error(f"Full traceback: {traceback.format_exc()}")
     finally:
         consumer.close()
-        logging.info("Kafka Consumer stopped.")
+        logging.info("Consumer closed")
 
 if __name__ == "__main__":
     main()

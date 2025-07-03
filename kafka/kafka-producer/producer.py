@@ -16,7 +16,7 @@ def main():
         retry_backoff_ms=300,
         request_timeout_ms=30000,
         metadata_max_age_ms=30000,
-        api_version=(2, 8, 0)  # Specify API version for compatibility
+        api_version=(2, 8, 0)
     )
     
     try:
@@ -24,7 +24,6 @@ def main():
             message = f"Message {i}"
             future = producer.send('mytopic', value=message.encode('utf-8'))
             
-            # Wait for the message to be sent
             record_metadata = future.get(timeout=10)
             
             logging.info(f'Sent: {message} to partition {record_metadata.partition} at offset {record_metadata.offset}')

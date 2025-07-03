@@ -25,18 +25,6 @@ services:
     networks:
       - kafka-net
 
-  kafka-producer:
-    build:
-      context: ./kafka-producer/
-    environment:
-      KAFKA_BROKER_URL: kafka-broker:9092
-    networks:
-      - kafka-net
-    depends_on:
-      - kafka-broker
-    restart: "no"
-    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 5 && echo 'Starting producer' && python producer.py"]
-
   kafka-consumer:
     build:
       context: ./kafka-consumer/
@@ -47,7 +35,24 @@ services:
     depends_on:
       - kafka-broker
     restart: "no"
-    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 10 && echo 'Starting consumer' && python consumer.py"]
+    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 30 && echo 'Starting consumer' && python consumer.py"]
+
+  mqtt-kafka-producer:
+    build:
+      context: ./mqtt-kafka-producer/
+    environment:
+      KAFKA_BROKER_URL: kafka-broker:9092
+      MQTT_BROKER: ${MQTT_BROKER}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+      MQTT_TOPICS: ${MQTT_TOPICS}
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka-broker
+    restart: unless-stopped
+    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 10 && echo 'Starting MQTT-Kafka producer' && python mqtt_kafka_producer.py"]
 
 networks:
   kafka-net:
