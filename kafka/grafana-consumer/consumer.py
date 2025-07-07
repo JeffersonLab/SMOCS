@@ -16,16 +16,6 @@ INFLUXDB_PASS = os.environ.get('INFLUXDB_PASS')
 influx = InfluxDBClient(host='influxdb', port=8086, username=INFLUXDB_USER, password=INFLUXDB_PASS)
 influx.switch_database(INFLUXDB_DB)
 
-# Set up Kafka consumer
-# consumer = KafkaConsumer(
-#     KAFKA_TOPIC,
-#     bootstrap_servers=KAFKA_SERVERS,
-#     auto_offset_reset='earliest',
-#     group_id='grafana-consumer',
-#     value_deserializer=lambda m: json.loads(m.decode('utf-8'))
-# )
-
-# print(f"Listening to Kafka topic '{KAFKA_TOPIC}'...")
 connect = False
 counter = 0
 while not connect:
@@ -41,12 +31,6 @@ while not connect:
         print(f"Waiting for Kafka broker: {e}. Retrying attempt {counter}...")
         counter += 1
         time.sleep(5)
-# consumer = KafkaConsumer(
-#     bootstrap_servers=KAFKA_SERVERS,
-#     auto_offset_reset='earliest',
-#     group_id='grafana-consumer',
-#     value_deserializer=lambda m: json.loads(m.decode('utf-8') if m else None)
-# )
 
 consumer.subscribe(pattern=r'.*')
 print("Subscribed to ALL Kafka topics...")
@@ -68,25 +52,50 @@ for msg in consumer:
     else:
         print("Received message of unexpected type:", type(value))
         continue
-    
-    print(f"type of msg here: {type(value)}")
 
-    if 'timeStamp' not in value or 'watchdog' not in value:
-        print("Skipping message due to missing 'timeStamp' or 'watchdog' key.")
+    if 'timeStamp' not in value or 'type' not in value:
+        print("Skipping message due to missing 'timeStamp' or 'type' key.")
+        continue
+    elif value['type'] != 'blinky-mqtt':
+        print(f"Skipping message with type '{value['type']}' (not 'blinky-mqtt').")
         continue
     
     timestamp = value['timeStamp']
-    value = value['watchdog']['value']
-    measurement = "counter"
+    rate1 = value['rate1']['value']
+    rate1_low = value['rate1']['alarm']['limits']['low']
+    rate1_high = value['rate1']['alarm']['limits']['high']
+    rate2 = value['rate2']['value']
+    rate2_low = value['rate2']['alarm']['limits']['low']
+    rate2_high = value['rate2']['alarm']['limits']['high']
+    rate3 = value['rate3']['value']
+    rate3_low = value['rate3']['alarm']['limits']['low']
+    rate3_high = value['rate3']['alarm']['limits']['high']
+    
+    measurement = "FlowRates"
 
     # Sanitize non-numeric values if needed
     influx_data = {
         "measurement": measurement,
-        "tags": {"source": "kafka"},
-        "fields": {}
+        "tags": {
+            "topic": topic
+        },
+        "fields": {
+            "rate1_value": rate1,
+            "rate2_value": rate2,
+            "rate3_value": rate3,
+            "rate1_low": rate1_low,
+            "rate1_high": rate1_high,
+            "rate2_low": rate2_low,
+            "rate2_high": rate2_high,
+            "rate3_low": rate3_low,
+            "rate3_high": rate3_high
+        },
+        # "time": timestamp
     }
-    influx_data["fields"]["timestamp"] = timestamp
-    influx_data["fields"]["value"] = value
+
+    
+    # influx_data["fields"]["timestamp"] = timestamp
+    # influx_data["fields"]["value"] = value
 
     # for k, v in value.items():
     #     if isinstance(v, (int, float, str)):
