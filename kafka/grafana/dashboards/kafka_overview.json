@@ -1,26 +1,151 @@
 {
-    "title": "Kafka Metrics",
-    "panels": [
-      {
-        "type": "graph",
-        "title": "Data From FNAL MQTT broker",
-        "gridPos": {
-                        "h": 8,
-                        "w": 12,
-                        "x": 0,
-                        "y": 0
-                    },
-        "datasource": "InfluxDB",
-        "targets": [
-          {
-            "measurement": "counter",
-            "refId": "A",
-            "select": [[{"type": "field", "params": ["value"]}]]
-          }
-        ]
-      }
-    ],
-    "schemaVersion": 30,
-    "version": 1
-  }
-  
+  "title": "Flow Rates Dashboard",
+  "schemaVersion": 30,
+  "version": 1,
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Flow Rate #1",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": "InfluxDB",
+      "lines": true,
+      "legend": { "show": true },
+      "seriesOverrides": [
+        {
+          "alias": "Rate 1 High",
+          "color": "#FF0000",
+          "dashes": true,
+          "linewidth": 1
+        },
+        {
+          "alias": "Rate 1 Low",
+          "color": "#0000FF",
+          "dashes": true,
+          "linewidth": 1
+        },
+        {
+          "alias": "Rate 1",
+          "color": "#00FF00",
+          "lines": false,
+          "points": true
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate1_value"] }]],
+          "alias": "Rate 1"
+        },
+        {
+          "refId": "B",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate1_high"] }]],
+          "alias": "Rate 1 High"
+        },
+        {
+          "refId": "C",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate1_low"] }]],
+          "alias": "Rate 1 Low"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Flow Rate #2",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": "InfluxDB",
+      "lines": true,
+      "legend": { "show": true },
+      "seriesOverrides": [
+        {
+          "alias": "Rate 2 High",
+          "color": "#FF0000",
+          "dashes": true,
+          "linewidth": 1
+        },
+        {
+          "alias": "Rate 2 Low",
+          "color": "#0000FF",
+          "dashes": true,
+          "linewidth": 1
+        },
+        {
+          "alias": "Rate 2",
+          "color": "#00FF00",
+          "lines": false,
+          "points": true
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate2_value"] }]],
+          "alias": "Rate 2"
+        },
+        {
+          "refId": "B",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate2_high"] }]],
+          "alias": "Rate 2 High"
+        },
+        {
+          "refId": "C",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate2_low"] }]],
+          "alias": "Rate 2 Low"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Flow Rate #3",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": "InfluxDB",
+      "lines": true,
+      "legend": { "show": true },
+      "seriesOverrides": [
+        {
+          "alias": "Rate 3 High",
+          "color": "#FF0000",
+          "dashes": true,
+          "linewidth": 1
+        },
+        {
+          "alias": "Rate 3 Low",
+          "color": "#0000FF",
+          "dashes": true,
+          "linewidth": 1
+        },
+        {
+          "alias": "Rate 3",
+          "color": "#00FF00",
+          "lines": false,
+          "points": true
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate3_value"] }]],
+          "alias": "Rate 3"
+        },
+        {
+          "refId": "B",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate3_high"] }]],
+          "alias": "Rate 3 High"
+        },
+        {
+          "refId": "C",
+          "measurement": "FlowRates",
+          "select": [[{ "type": "field", "params": ["rate3_low"] }]],
+          "alias": "Rate 3 Low"
+        }
+      ]
+    }
+  ]
+}
