@@ -1,0 +1,26 @@
+{
+    "title": "Kafka Metrics",
+    "panels": [
+      {
+        "type": "graph",
+        "title": "Data From FNAL MQTT broker",
+        "gridPos": {
+                        "h": 8,
+                        "w": 12,
+                        "x": 0,
+                        "y": 0
+                    },
+        "datasource": "InfluxDB",
+        "targets": [
+          {
+            "measurement": "counter",
+            "refId": "A",
+            "select": [[{"type": "field", "params": ["value"]}]]
+          }
+        ]
+      }
+    ],
+    "schemaVersion": 30,
+    "version": 1
+  }
+  
