@@ -22,20 +22,36 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     networks:
       - kafka-net
 
-  kafka-consumer:
-    build:
-      context: ./kafka-consumer/
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
     environment:
-      KAFKA_BROKER_URL: kafka-broker:9092
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin123
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8086/ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
     networks:
       - kafka-net
-    depends_on:
-      - kafka-broker
-    restart: "no"
-    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 30 && echo 'Starting consumer' && python consumer.py"]
 
   mqtt-kafka-producer:
     build:
@@ -50,9 +66,53 @@ services:
     networks:
       - kafka-net
     depends_on:
-      - kafka-broker
+      kafka-broker:
+        condition: service_healthy
     restart: unless-stopped
-    command: ["sh", "-c", "echo 'Waiting for Kafka to start' && sleep 10 && echo 'Starting MQTT-Kafka producer' && python mqtt_kafka_producer.py"]
+    command: ["python", "mqtt_kafka_producer.py"]
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET}
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    networks:
+      - kafka-net
+
+  grafana-consumer:
+    build: ./grafana-consumer/
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_URL: kafka-broker:9092
+      KAFKA_TOPIC: my-topic
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+    networks:
+      - kafka-net
+    command: ["sh", "-c", "sleep 15 && exec python consumer.py"]
+
+volumes:
+  influxdb-data:
+  grafana-storage:
 
 networks:
   kafka-net:

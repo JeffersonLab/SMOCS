@@ -1,7 +1,6 @@
 import paho.mqtt.client as mqtt
 from kafka import KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
-import time
 import os
 import logging
 
@@ -168,7 +167,6 @@ class MQTTKafkaProducer:
 
 def main():
     logging.info("Starting MQTT-to-Kafka bridge with topic preservation")
-    time.sleep(10)
     
     bridge = MQTTKafkaProducer()
     bridge.start()
