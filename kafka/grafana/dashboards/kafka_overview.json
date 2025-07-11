@@ -11,15 +11,15 @@
       "targets": [
         {
           "refId": "A",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate1_value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate1_value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1\")"
         },
         {
           "refId": "B",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate1_high\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1 High\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate1_high\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1 High\")"
         },
         {
           "refId": "C",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate1_low\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1 Low\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate1_low\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1 Low\")"
         }
       ]
     },
@@ -31,15 +31,15 @@
       "targets": [
         {
           "refId": "A",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate2_value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 2\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate2_value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 2\")"
         },
         {
           "refId": "B",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate2_high\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 2 High\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate2_high\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 2 High\")"
         },
         {
           "refId": "C",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate2_low\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 2 Low\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate2_low\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 2 Low\")"
         }
       ]
     },
@@ -51,15 +51,15 @@
       "targets": [
         {
           "refId": "A",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate3_value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 3\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate3_value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 3\")"
         },
         {
           "refId": "B",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate3_high\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 3 High\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate3_high\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 3 High\")"
         },
         {
           "refId": "C",
-          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate3_low\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 3 Low\")"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r.topic == \"bl-fermi-01-dump.blinky-hub.blinky-mqtt.flowMeter-01.reading\")\n  |> filter(fn: (r) => r._field == \"rate3_low\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 3 Low\")"
         }
       ]
     }
