@@ -7,7 +7,7 @@
       "type": "timeseries",
       "title": "Flow Rate #1",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "datasource": { "type": "influxdb", "uid": "InfluxDB" },
       "targets": [
         {
           "refId": "A",
