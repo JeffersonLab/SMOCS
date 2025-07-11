@@ -4,146 +4,22 @@
   "version": 1,
   "panels": [
     {
-      "type": "graph",
+      "type": "timeseries",
       "title": "Flow Rate #1",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": "InfluxDB",
-      "lines": true,
-      "legend": { "show": true },
-      "seriesOverrides": [
-        {
-          "alias": "Rate 1 High",
-          "color": "#FF0000",
-          "dashes": true,
-          "linewidth": 1
-        },
-        {
-          "alias": "Rate 1 Low",
-          "color": "#0000FF",
-          "dashes": true,
-          "linewidth": 1
-        },
-        {
-          "alias": "Rate 1",
-          "color": "#00FF00",
-          "lines": false,
-          "points": true
-        }
-      ],
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
       "targets": [
         {
           "refId": "A",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate1_value"] }]],
-          "alias": "Rate 1"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate1_value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1\")"
         },
         {
           "refId": "B",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate1_high"] }]],
-          "alias": "Rate 1 High"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate1_high\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1 High\")"
         },
         {
           "refId": "C",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate1_low"] }]],
-          "alias": "Rate 1 Low"
-        }
-      ]
-    },
-    {
-      "type": "graph",
-      "title": "Flow Rate #2",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": "InfluxDB",
-      "lines": true,
-      "legend": { "show": true },
-      "seriesOverrides": [
-        {
-          "alias": "Rate 2 High",
-          "color": "#FF0000",
-          "dashes": true,
-          "linewidth": 1
-        },
-        {
-          "alias": "Rate 2 Low",
-          "color": "#0000FF",
-          "dashes": true,
-          "linewidth": 1
-        },
-        {
-          "alias": "Rate 2",
-          "color": "#00FF00",
-          "lines": false,
-          "points": true
-        }
-      ],
-      "targets": [
-        {
-          "refId": "A",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate2_value"] }]],
-          "alias": "Rate 2"
-        },
-        {
-          "refId": "B",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate2_high"] }]],
-          "alias": "Rate 2 High"
-        },
-        {
-          "refId": "C",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate2_low"] }]],
-          "alias": "Rate 2 Low"
-        }
-      ]
-    },
-    {
-      "type": "graph",
-      "title": "Flow Rate #3",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "datasource": "InfluxDB",
-      "lines": true,
-      "legend": { "show": true },
-      "seriesOverrides": [
-        {
-          "alias": "Rate 3 High",
-          "color": "#FF0000",
-          "dashes": true,
-          "linewidth": 1
-        },
-        {
-          "alias": "Rate 3 Low",
-          "color": "#0000FF",
-          "dashes": true,
-          "linewidth": 1
-        },
-        {
-          "alias": "Rate 3",
-          "color": "#00FF00",
-          "lines": false,
-          "points": true
-        }
-      ],
-      "targets": [
-        {
-          "refId": "A",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate3_value"] }]],
-          "alias": "Rate 3"
-        },
-        {
-          "refId": "B",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate3_high"] }]],
-          "alias": "Rate 3 High"
-        },
-        {
-          "refId": "C",
-          "measurement": "FlowRates",
-          "select": [[{ "type": "field", "params": ["rate3_low"] }]],
-          "alias": "Rate 3 Low"
+          "query": "from(bucket: \"kafka_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"FlowRates\")\n  |> filter(fn: (r) => r._field == \"rate1_low\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Rate 1 Low\")"
         }
       ]
     }

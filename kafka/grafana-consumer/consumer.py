@@ -1,20 +1,22 @@
 import os
 from kafka import KafkaConsumer
-from influxdb import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 import json
 import time
 import ast
 
 # Environment variables
-KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC')  # Not used in this example, but can be set if needed
+KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC')
 KAFKA_SERVERS = os.environ.get('KAFKA_BROKER_URL', 'kafka-broker:9092')
-INFLUXDB_DB = os.environ.get('INFLUXDB_DB', 'kafka_data')
-INFLUXDB_USER = os.environ.get('INFLUXDB_USER')
-INFLUXDB_PASS = os.environ.get('INFLUXDB_PASS')
+INFLUXDB_URL = os.environ.get('INFLUXDB_URL', 'http://influxdb:8086')
+INFLUXDB_TOKEN = os.environ.get('INFLUXDB_TOKEN')
+INFLUXDB_ORG = os.environ.get('INFLUXDB_ORG', 'myorg')
+INFLUXDB_BUCKET = os.environ.get('INFLUXDB_BUCKET', 'kafka_data')
 
 # Set up InfluxDB client
-influx = InfluxDBClient(host='influxdb', port=8086, username=INFLUXDB_USER, password=INFLUXDB_PASS)
-influx.switch_database(INFLUXDB_DB)
+client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+write_api = client.write_api(write_options=SYNCHRONOUS)
 
 connect = False
 counter = 0
@@ -25,7 +27,7 @@ while not connect:
             auto_offset_reset='earliest',
             group_id='grafana-consumer',
             value_deserializer=lambda m: m.decode('utf-8') if m else None
-            )
+        )
         connect = True
     except Exception as e:
         print(f"Waiting for Kafka broker: {e}. Retrying attempt {counter}...")
@@ -35,12 +37,12 @@ while not connect:
 consumer.subscribe(pattern=r'.*')
 print("Subscribed to ALL Kafka topics...")
 
-
 for msg in consumer:
     print(f"msg: {msg}")
-    value = msg.value #.decode("utf-8")
+    value = msg.value
     topic = msg.topic
-    print("Received message:", topic, type(value), value)  # Show escaped string
+    print("Received message:", topic, type(value), value)
+    
     if value[:7] == "Message":
         print("Received 'Message 0', skipping...")
         continue
@@ -61,44 +63,25 @@ for msg in consumer:
         continue
     
     timestamp = value['timeStamp']
-    rate1 = value['rate1']['value']
-    rate1_low = value['rate1']['alarm']['limits']['low']
-    rate1_high = value['rate1']['alarm']['limits']['high']
-    rate2 = value['rate2']['value']
-    rate2_low = value['rate2']['alarm']['limits']['low']
-    rate2_high = value['rate2']['alarm']['limits']['high']
-    rate3 = value['rate3']['value']
-    rate3_low = value['rate3']['alarm']['limits']['low']
-    rate3_high = value['rate3']['alarm']['limits']['high']
     
-    measurement = "FlowRates"
-
-    # Sanitize non-numeric values if needed
-    influx_data = {
-        "measurement": measurement,
-        "tags": {
-            "topic": topic
-        },
-        "fields": {
-            "rate1_value": rate1,
-            "rate2_value": rate2,
-            "rate3_value": rate3,
-            "rate1_low": rate1_low,
-            "rate1_high": rate1_high,
-            "rate2_low": rate2_low,
-            "rate2_high": rate2_high,
-            "rate3_low": rate3_low,
-            "rate3_high": rate3_high
-        },
-        # "time": timestamp
-    }
-
+    # Create point using the new Point API
+    point = Point("FlowRates") \
+        .tag("topic", topic) \
+        .field("rate1_value", value['rate1']['value']) \
+        .field("rate1_low", value['rate1']['alarm']['limits']['low']) \
+        .field("rate1_high", value['rate1']['alarm']['limits']['high']) \
+        .field("rate2_value", value['rate2']['value']) \
+        .field("rate2_low", value['rate2']['alarm']['limits']['low']) \
+        .field("rate2_high", value['rate2']['alarm']['limits']['high']) \
+        .field("rate3_value", value['rate3']['value']) \
+        .field("rate3_low", value['rate3']['alarm']['limits']['low']) \
+        .field("rate3_high", value['rate3']['alarm']['limits']['high'])
     
-    # influx_data["fields"]["timestamp"] = timestamp
-    # influx_data["fields"]["value"] = value
-
-    # for k, v in value.items():
-    #     if isinstance(v, (int, float, str)):
-    #         influx_data["fields"][k] = v
-
-    influx.write_points([influx_data])
+    # If you want to use the original timestamp, add:
+    # .time(timestamp)
+    
+    try:
+        write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
+        print(f"Successfully wrote data to InfluxDB bucket: {INFLUXDB_BUCKET}")
+    except Exception as e:
+        print(f"Error writing to InfluxDB: {e}")

@@ -5,10 +5,14 @@ datasources:
     type: influxdb
     access: proxy
     url: http://influxdb:8086
-    database: kafka_data
+    database: kafka_data  # This is now the bucket name
     user: admin
     secureJsonData:
-      password: admin123
+      token: ${INFLUXDB_TOKEN}
+    jsonData:
+      version: Flux
+      organization: ${INFLUXDB_ORG}
+      defaultBucket: ${INFLUXDB_BUCKET}
     isDefault: true
     version: 1
     editable: true
