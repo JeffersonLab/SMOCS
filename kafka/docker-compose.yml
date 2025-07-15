@@ -92,8 +92,8 @@ services:
     networks:
       - kafka-net
 
-  grafana-consumer:
-    build: ./grafana-consumer/
+  influxdb-consumer:
+    build: ./influxdb-consumer/
     depends_on:
       kafka-broker:
         condition: service_healthy
