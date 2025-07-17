@@ -63,6 +63,7 @@ services:
       MQTT_USERNAME: ${MQTT_USERNAME}
       MQTT_PASSWORD: ${MQTT_PASSWORD}
       MQTT_TOPICS: ${MQTT_TOPICS}
+      PYTHONPATH: /app
     networks:
       - kafka-net
     depends_on:
