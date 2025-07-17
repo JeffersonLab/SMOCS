@@ -111,7 +111,7 @@ services:
       PYTHONPATH: /app
     networks:
       - kafka-net
-    command: ["sh", "-c", "sleep 15 && exec python consumer.py"]
+    command: ["sh", "-c", "sleep 15 && exec python influxdb_kafka_consumer.py"]
 
 volumes:
   influxdb-data:

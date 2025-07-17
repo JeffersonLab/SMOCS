@@ -9,8 +9,8 @@ RUN pip install -r requirements.txt
 # Copy cores directory (contains base classes)
 COPY cores ./cores
 
-COPY influxdb-consumer/consumer.py ./
+COPY influxdb-consumer/influxdb_kafka_consumer.py ./
 
 ENV PYTHONPATH=/app
 
-CMD ["python", "consumer.py"]
+CMD ["python", "influxdb_kafka_consumer.py"]
