@@ -93,7 +93,9 @@ services:
       - kafka-net
 
   influxdb-consumer:
-    build: ./influxdb-consumer/
+    build:
+      context: ./
+      dockerfile: ./influxdb-consumer/Dockerfile
     depends_on:
       kafka-broker:
         condition: service_healthy
@@ -106,6 +108,7 @@ services:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+      PYTHONPATH: /app
     networks:
       - kafka-net
     command: ["sh", "-c", "sleep 15 && exec python consumer.py"]
