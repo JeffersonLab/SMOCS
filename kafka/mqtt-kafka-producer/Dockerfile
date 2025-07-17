@@ -1,17 +1,13 @@
 FROM python:3.10-slim
-
 WORKDIR /app
 
-# Install required packages
-COPY requirements.txt .
+# Copy and install requirements first (for better caching)
+COPY mqtt-kafka-producer/requirements.txt .
 RUN pip install -r requirements.txt
 
-# Copy both cores and producers directories
-COPY ../cores ./cores
-COPY ../producers ./producers
-
-# Copy the main producer file
-COPY mqtt_kafka_producer.py ./
+# Copy both cores and producers directories (now they're in context)
+COPY cores ./cores
+COPY mqtt-kafka-producer/mqtt_kafka_producer.py ./
 
 # Set PYTHONPATH to include current directory
 ENV PYTHONPATH=/app

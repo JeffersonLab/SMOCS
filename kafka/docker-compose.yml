@@ -55,7 +55,8 @@ services:
 
   mqtt-kafka-producer:
     build:
-      context: ./mqtt-kafka-producer/
+      context: ./
+      dockerfile: ./mqtt-kafka-producer/Dockerfile
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
       MQTT_BROKER: ${MQTT_BROKER}
