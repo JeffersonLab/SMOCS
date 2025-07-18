@@ -4,7 +4,7 @@ import logging
 import sys
 from pathlib import Path
 
-from cores import KafkaProducerBase
+from smocs.cores import KafkaProducerBase
 
 logging.basicConfig(level=logging.INFO)
 
