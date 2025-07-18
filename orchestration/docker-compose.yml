@@ -53,10 +53,30 @@ services:
     networks:
       - kafka-net
 
-  mqtt-kafka-producer:
+  # mqtt-kafka-producer:
+  #   build:
+  #     context: ../
+  #     dockerfile: ./orchestration/containers/mqtt-kafka-producer/Dockerfile
+  #   environment:
+  #     KAFKA_BROKER_URL: kafka-broker:9092
+  #     MQTT_BROKER: ${MQTT_BROKER}
+  #     MQTT_PORT: ${MQTT_PORT:-1883}
+  #     MQTT_USERNAME: ${MQTT_USERNAME}
+  #     MQTT_PASSWORD: ${MQTT_PASSWORD}
+  #     MQTT_TOPICS: ${MQTT_TOPICS}
+  #     PYTHONPATH: /app
+  #   networks:
+  #     - kafka-net
+  #   depends_on:
+  #     kafka-broker:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
+
+  source-kafka-producer:
     build:
       context: ../
-      dockerfile: ./orchestration/containers/mqtt-kafka-producer/Dockerfile
+      dockerfile: ./orchestration/containers/source-kafka-producer/Dockerfile
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
       MQTT_BROKER: ${MQTT_BROKER}
@@ -64,6 +84,7 @@ services:
       MQTT_USERNAME: ${MQTT_USERNAME}
       MQTT_PASSWORD: ${MQTT_PASSWORD}
       CONFIG_PATH: /app/config.yaml
+      EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
       PYTHONPATH: /app
     networks:
       - kafka-net
@@ -71,7 +92,7 @@ services:
       kafka-broker:
         condition: service_healthy
     restart: unless-stopped
-    command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
+    command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
 
   grafana:
     image: grafana/grafana:12.0.2

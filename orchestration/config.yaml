@@ -13,6 +13,13 @@ mqtt:
         rate3_high: "rate3.alarm.limits.high"
       timestamp_path: "timeStamp"
 
+epics:
+  sensors:
+    IPM9A01:
+      - IPM9A01.XPOS
+      - IPM9A01.YPOS
+      - IPM9A01.PHAS
+
 kafka:
   auto_create: true
   partitions: 1
