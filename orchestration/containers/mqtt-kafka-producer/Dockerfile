@@ -11,6 +11,3 @@ COPY smocs ./smocs
 
 # Set Python path
 ENV PYTHONPATH=/app
-
-# Run the producer directly from the smocs package
-CMD ["python", "-m", "smocs.producers.mqtt_kafka_producer"]

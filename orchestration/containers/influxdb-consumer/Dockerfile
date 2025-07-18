@@ -11,6 +11,3 @@ COPY smocs ./smocs
 
 # Set Python path
 ENV PYTHONPATH=/app
-
-# Run the consumer directly from the smocs package
-CMD ["python", "-m", "smocs.consumers.influxdb_kafka_consumer"]
