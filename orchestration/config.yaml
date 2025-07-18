@@ -1,13 +1,5 @@
 mqtt:
-  topics:
-    - topic: "bl-fermi-01-dump/blinky-hub/blinky-MAX31865/28-cd-c1-04-94-3d/reading"
-      channel_paths:
-        res1: "res1.value"
-        res2: "res2.value"
-        temp1: "temp1.value"
-        temp2: "temp2.value"
-      timestamp_path: "timeStamp"
-      
+  topics:      
     - topic: "bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading"
       channel_paths:
         rate1_value: "rate1.value"
