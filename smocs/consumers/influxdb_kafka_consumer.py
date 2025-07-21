@@ -89,17 +89,12 @@ class InfluxDBConsumer(KafkaConsumerBase):
             if not parsed_data:
                 return False
             
-            # Filter for blinky-mqtt messages only
-            if not self.is_blinky_mqtt_message(parsed_data):
-                logging.debug(f"Skipping non-blinky-mqtt message with type '{parsed_data.get('type', 'unknown')}'")
-                return True
-            
             # Create InfluxDB point
             point = self.create_influx_point(parsed_data, topic)
             if not point:
                 return False
             
-            # Write to InfluxDB
+            # # Write to InfluxDB
             self.write_api.write(bucket=self.influxdb_bucket, org=self.influxdb_org, record=point)
             logging.info(f"Successfully wrote data to InfluxDB bucket: {self.influxdb_bucket}")
             
@@ -143,55 +138,9 @@ class InfluxDBConsumer(KafkaConsumerBase):
         except Exception as e:
             logging.error(f"Error parsing message data: {e}")
             return None
+
     
-    def is_blinky_mqtt_message(self, data):
-        """
-        Check if message is a blinky-mqtt type message.
-        
-        Args:
-            data (dict): Parsed message data
-            
-        Returns:
-            bool: True if message is blinky-mqtt type, False otherwise
-        """
-        if not isinstance(data, dict):
-            return False
-        
-        # Check for required fields
-        if 'timeStamp' not in data or 'type' not in data:
-            logging.debug("Skipping message due to missing 'timeStamp' or 'type' key")
-            return False
-        
-        # Check message type
-        if data['type'] != 'blinky-mqtt':
-            return False
-        
-        # Check for required rate data
-        required_rates = ['rate1', 'rate2', 'rate3']
-        for rate in required_rates:
-            if rate not in data:
-                logging.debug(f"Skipping message due to missing '{rate}' data")
-                return False
-            
-            # Check for required rate fields
-            rate_data = data[rate]
-            if not isinstance(rate_data, dict) or 'value' not in rate_data:
-                logging.debug(f"Skipping message due to invalid '{rate}' data structure")
-                return False
-            
-            # Check for alarm limits
-            if 'alarm' not in rate_data or 'limits' not in rate_data['alarm']:
-                logging.debug(f"Skipping message due to missing '{rate}' alarm limits")
-                return False
-            
-            limits = rate_data['alarm']['limits']
-            if 'low' not in limits or 'high' not in limits:
-                logging.debug(f"Skipping message due to missing '{rate}' alarm limit values")
-                return False
-        
-        return True
-    
-    def create_influx_point(self, data, topic):
+    def create_influx_point(self, message, topic):
         """
         Create an InfluxDB point from message data.
         
@@ -203,18 +152,14 @@ class InfluxDBConsumer(KafkaConsumerBase):
             Point or None: InfluxDB point or None if creation failed
         """
         try:
+            data = message['channels']
+            
             point = Point("FlowRates") \
                 .tag("topic", topic) \
-                .field("rate1_value", data['rate1']['value']) \
-                .field("rate1_low", data['rate1']['alarm']['limits']['low']) \
-                .field("rate1_high", data['rate1']['alarm']['limits']['high']) \
-                .field("rate2_value", data['rate2']['value']) \
-                .field("rate2_low", data['rate2']['alarm']['limits']['low']) \
-                .field("rate2_high", data['rate2']['alarm']['limits']['high']) \
-                .field("rate3_value", data['rate3']['value']) \
-                .field("rate3_low", data['rate3']['alarm']['limits']['low']) \
-                .field("rate3_high", data['rate3']['alarm']['limits']['high'])
             
+            for key, value in data.items():
+                point.field(key, value)
+        
             # Optionally use the original timestamp
             # point.time(data['timeStamp'])
             

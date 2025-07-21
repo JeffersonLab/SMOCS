@@ -1,31 +1,39 @@
 import paho.mqtt.client as mqtt
 import os
 import logging
-import sys
+import json
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 from smocs.cores import KafkaProducerBase
+from smocs.utils import ConfigLoader
 
 logging.basicConfig(level=logging.INFO)
 
 
 class MQTTKafkaProducer(KafkaProducerBase):
     """
-    MQTT to Kafka producer that inherits from KafkaProducerBase.
+    MQTT to Kafka producer with configuration-driven message parsing.
     
-    This producer connects to an MQTT broker, subscribes to specified topics,
-    and forwards all received messages to corresponding Kafka topics.
+    This producer connects to an MQTT broker, subscribes to configured topics,
+    parses messages according to their specific configurations, and forwards
+    structured data to corresponding Kafka topics.
     """
     
     def __init__(self):
         """
-        Initialize the MQTT to Kafka producer.
-        Uses environment variables for configuration.
+        Initialize the MQTT to Kafka producer with configuration.
         """
-        # Get Kafka broker URL from environment
-        kafka_broker_url = os.getenv('KAFKA_BROKER_URL', 'kafka-broker:9092')
+        # Load configuration first
+        config_path = os.getenv('CONFIG_PATH', '/app/config.yaml')
+        self.config_loader = ConfigLoader(config_path)
+        
+        # Validate MQTT configuration exists
+        if not self.config_loader.has_mqtt_config():
+            raise ValueError("No MQTT configuration found in config file")
         
         # Initialize base class
+        kafka_broker_url = os.getenv('KAFKA_BROKER_URL', 'kafka-broker:9092')
         super().__init__(kafka_broker_url)
         
         # MQTT Configuration from environment
@@ -38,15 +46,90 @@ class MQTTKafkaProducer(KafkaProducerBase):
         if not self.mqtt_username or not self.mqtt_password:
             raise ValueError("MQTT_USERNAME and MQTT_PASSWORD environment variables are required")
         
-        # Support multiple MQTT topics (comma separated)
-        mqtt_topics_str = os.getenv('MQTT_TOPICS', 'test/topic/#')
-        self.mqtt_topics = [topic.strip() for topic in mqtt_topics_str.split(',')]
+        # Get configured topics
+        self.topic_configs = {
+            config['topic']: config 
+            for config in self.config_loader.get_mqtt_topic_configs()
+        }
         
         # MQTT client
         self.mqtt_client = None
         
         logging.info(f"MQTT: {self.mqtt_broker}:{self.mqtt_port}")
-        logging.info(f"MQTT Topics: {self.mqtt_topics}")
+        logging.info(f"Loaded {len(self.topic_configs)} topic configurations:")
+        for topic in self.topic_configs.keys():
+            logging.info(f"  - {topic}")
+    
+    def extract_nested_value(self, data: Dict[str, Any], path: str) -> Any:
+        """
+        Extract value from nested dictionary using dot notation path.
+        
+        Args:
+            data: Source dictionary
+            path: Dot notation path (e.g., 'res1.value')
+            
+        Returns:
+            Extracted value
+            
+        Raises:
+            ValueError: If path cannot be extracted
+        """
+        keys = path.split('.')
+        current = data
+        
+        try:
+            for key in keys:
+                current = current[key]
+            return current
+        except (KeyError, TypeError) as e:
+            raise ValueError(f"Failed to extract path '{path}': {e}")
+    
+    def parse_mqtt_message(self, message: str, topic_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Parse MQTT message according to topic configuration.
+        
+        Args:
+            message: Raw MQTT message string
+            topic_config: Configuration for this topic
+            
+        Returns:
+            Structured message for Kafka
+            
+        Raises:
+            ValueError: If parsing fails
+        """
+        try:
+            # Parse JSON message
+            data = json.loads(message)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in MQTT message: {e}")
+        
+        # Extract timestamp if configured
+        timestamp = None
+        if 'timestamp_path' in topic_config:
+            try:
+                timestamp = self.extract_nested_value(data, topic_config['timestamp_path'])
+            except ValueError as e:
+                raise ValueError(f"Failed to extract timestamp: {e}")
+        
+        # Extract channels
+        channels = {}
+        for channel_name, channel_path in topic_config['channel_paths'].items():
+            try:
+                channels[channel_name] = self.extract_nested_value(data, channel_path)
+            except ValueError as e:
+                raise ValueError(f"Failed to extract channel '{channel_name}': {e}")
+        
+        # Build output message
+        output_message = {
+            "channels": channels,
+            "source_topic": topic_config['topic']
+        }
+        
+        if timestamp:
+            output_message["timestamp"] = timestamp
+        
+        return output_message
     
     def sanitize_topic_name(self, mqtt_topic):
         """
@@ -70,18 +153,14 @@ class MQTTKafkaProducer(KafkaProducerBase):
     def on_mqtt_connect(self, client, userdata, flags, rc):
         """
         Callback for when MQTT client connects to the broker.
-        
-        Args:
-            client: MQTT client instance
-            userdata: User data passed to callbacks
-            flags: Response flags sent by the broker
-            rc: Connection result code
         """
         if rc == 0:
             logging.info("Connected to MQTT broker successfully!")
-            for topic in self.mqtt_topics:
+            
+            # Subscribe only to configured topics
+            for topic in self.topic_configs.keys():
                 result = client.subscribe(topic)
-                logging.info(f"Subscribed to: {topic} - Result: {result}")
+                logging.info(f"Subscribed to configured topic: {topic} - Result: {result}")
         else:
             error_messages = {
                 1: "Connection refused - incorrect protocol version",
@@ -103,21 +182,40 @@ class MQTTKafkaProducer(KafkaProducerBase):
             msg: MQTT message object
         """
         try:
-            message = msg.payload.decode('utf-8')
             mqtt_topic = msg.topic
+            message = msg.payload.decode('utf-8')
             
-            # Convert MQTT topic to valid Kafka topic name
+            # Only process configured topics
+            if mqtt_topic not in self.topic_configs:
+                logging.debug(f"Skipping non-configured topic: {mqtt_topic}")
+                return
+            
+            topic_config = self.topic_configs[mqtt_topic]
+            
+            logging.info(f"Processing configured topic '{mqtt_topic}'")
+            logging.debug(f"Raw message: {message}'")
+            
+            try:
+                parsed_message = self.parse_mqtt_message(message, topic_config)
+            except ValueError as e:
+                logging.error(f"Failed to parse message from topic '{mqtt_topic}': {e}")
+                logging.error(f"Raw message: {message}")
+                raise
+            
+            # Convert to Kafka topic name
             kafka_topic = self.sanitize_topic_name(mqtt_topic)
             
-            logging.info(f"MQTT received from '{mqtt_topic}': {message[:100]}{'...' if len(message) > 100 else ''}")
+            # Send to Kafka
+            kafka_message = json.dumps(parsed_message)
+            record_metadata = self.send_to_kafka(kafka_topic, kafka_message)
             
-            # Send to Kafka using base class method
-            record_metadata = self.send_to_kafka(kafka_topic, message)
-            
-            logging.info(f'Forwarded to Kafka topic "{kafka_topic}" (from MQTT "{mqtt_topic}") - partition {record_metadata.partition}, offset {record_metadata.offset}')
+            logging.info(f'Successfully processed and sent to Kafka topic "{kafka_topic}" - partition {record_metadata.partition}, offset {record_metadata.offset}')
+            logging.debug(f'Kafka message: {kafka_message}')
             
         except Exception as e:
-            logging.error(f"Error forwarding message: {e}")
+            logging.error(f"Critical error processing message from topic {mqtt_topic}: {e}")
+            # For configured topics, we want to error out rather than continue
+            raise
     
     def setup_mqtt_client(self):
         """
@@ -142,7 +240,7 @@ class MQTTKafkaProducer(KafkaProducerBase):
         4. Starts the main processing loop
         """
         try:
-            logging.info("Starting MQTT-to-Kafka bridge with topic preservation")
+            logging.info("Starting configurable MQTT-to-Kafka bridge")
             
             # Setup Kafka producer using base class method
             logging.info("Setting up Kafka producer...")
@@ -188,7 +286,7 @@ def main():
     """
     Main entry point for the MQTT to Kafka producer.
     """
-    logging.info("Starting MQTT-to-Kafka bridge with topic preservation")
+    logging.info("Starting configurable MQTT-to-Kafka bridge")
     
     producer = MQTTKafkaProducer()
     producer.start()

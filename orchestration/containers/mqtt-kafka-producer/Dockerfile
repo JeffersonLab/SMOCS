@@ -9,5 +9,8 @@ RUN pip install -r requirements.txt
 # Copy the entire smocs package (from root build context)
 COPY smocs ./smocs
 
+# Copy configuration file
+COPY orchestration/config.yaml ./config.yaml
+
 # Set Python path
 ENV PYTHONPATH=/app

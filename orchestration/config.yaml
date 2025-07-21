@@ -1,0 +1,22 @@
+mqtt:
+  topics:      
+    - topic: "bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading"
+      channel_paths:
+        rate1_value: "rate1.value"
+        rate1_low: "rate1.alarm.limits.low"
+        rate1_high: "rate1.alarm.limits.high"
+        rate2_value: "rate2.value"
+        rate2_low: "rate2.alarm.limits.low"
+        rate2_high: "rate2.alarm.limits.high"
+        rate3_value: "rate3.value"
+        rate3_low: "rate3.alarm.limits.low"
+        rate3_high: "rate3.alarm.limits.high"
+      timestamp_path: "timeStamp"
+
+kafka:
+  auto_create: true
+  partitions: 1
+  replication_factor: 1
+
+project:
+  name: "smocs-fnal-streaming"
