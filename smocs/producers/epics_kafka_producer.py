@@ -1,4 +1,6 @@
 import epics
+print(f"find libca: {epics.ca.find_libca()}")
+epics.ca.initialize_libca()
 import os
 import logging
 import sys
@@ -44,9 +46,9 @@ class EpicsKafkaProducer(KafkaProducerBase):
         for sensor in self.sensors:
             self.sensors_pv_objects[sensor] = []
             for pv in self.sensors[sensor]:
-                self.sensors_pv_objects.append(epics.PV(pv))
+                self.sensors_pv_objects[sensor].append(epics.PV(pv))
         
-        logging.info(f"EPICS: {os.environ["EPICS_CA_ADDR_LIST"]}")
+        logging.info(f"EPICS: {os.environ['EPICS_CA_ADDR_LIST']}")
         logging.info(f"EPICS Topics: {self.topics}")
         
     
