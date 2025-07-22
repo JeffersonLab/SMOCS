@@ -1,5 +1,4 @@
 import epics
-print(f"find libca: {epics.ca.find_libca()}")
 epics.ca.initialize_libca()
 import os
 import logging
@@ -42,15 +41,13 @@ class EpicsKafkaProducer(KafkaProducerBase):
             print(e)
             sys.exit(1)
         
-        self.sensors = config['epics']['sensors']
-        self.sensors_pv_objects = {}
-        for sensor in self.sensors:
-            self.sensors_pv_objects[sensor] = []
-            for pv in self.sensors[sensor]:
-                self.sensors_pv_objects[sensor].append(epics.PV(pv))
+        self.pv_list = config['epics']['PVs']
+        self.source = config['epics']['source']
+        
         
         logging.info(f"EPICS: {os.environ['EPICS_CA_ADDR_LIST']}")
-        logging.info(f"EPICS reading sensors: {self.sensors}")
+        logging.info(f"EPICS reading pvs: {self.pv_list}")
+        
         
     
     def sanitize_topic_name(self, topics):
@@ -94,23 +91,23 @@ class EpicsKafkaProducer(KafkaProducerBase):
             logging.info("Starting EPICS loop...")
             while True:
                 time.sleep(1)
-                for sensor in self.sensors_pv_objects:
-                    topic = sensor
-                    pv_list = self.sensors[sensor]
-                    channels = {pv_list[i]:self.sensors_pv_objects[sensor][i].get() for i in range(len(pv_list))}
-                    timestamp = self.sensors_pv_objects[sensor][0].timestamp
-                    message = {'timestamp': timestamp, 'channels':channels, 'source_topic':topic}
-                    message = json.dumps(message)
-                    # Convert EPICS topic to valid Kafka topic name
-                    kafka_topic = self.sanitize_topic_name(topic)
+                
                     
-                    logging.info(f"EPICS received from '{topic}' timestamp {timestamp}: ", channels)
+                all_pv_values = epics.caget_many(self.pv_list)
+                channels = {self.pv_list[i]:all_pv_values[i] for i in range(len(self.pv_list))}
+                timestamp = time.time()
+                message = {'timestamp': timestamp, 'channels':channels, 'source_topic':self.source}
+                message = json.dumps(message)
+                # Convert EPICS topic to valid Kafka topic name
+                kafka_topic = self.sanitize_topic_name(self.source)
                     
-                    print(f"Type of kafka message: {type(message)}")
-                    # Send to Kafka using base class method
-                    record_metadata = self.send_to_kafka(kafka_topic, message)
-                    
-                    logging.info(f'Forwarded to Kafka topic "{kafka_topic}" (from EPICS "{topic}") - partition {record_metadata.partition}, offset {record_metadata.offset}')
+                logging.info(f"EPICS received from '{self.source}' timestamp {timestamp}: ", channels)
+                
+                print(f"Type of kafka message: {type(message)}")
+                # Send to Kafka using base class method
+                record_metadata = self.send_to_kafka(kafka_topic, message)
+                
+                logging.info(f'Forwarded to Kafka topic "{kafka_topic}" (from EPICS "{self.source}") - partition {record_metadata.partition}, offset {record_metadata.offset}')
                     
             
         except KeyboardInterrupt:
