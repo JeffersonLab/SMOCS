@@ -5,6 +5,7 @@ import os
 import logging
 import sys
 import yaml
+import json
 from pathlib import Path
 import time
 
@@ -49,7 +50,7 @@ class EpicsKafkaProducer(KafkaProducerBase):
                 self.sensors_pv_objects[sensor].append(epics.PV(pv))
         
         logging.info(f"EPICS: {os.environ['EPICS_CA_ADDR_LIST']}")
-        logging.info(f"EPICS Topics: {self.topics}")
+        logging.info(f"EPICS reading sensors: {self.sensors}")
         
     
     def sanitize_topic_name(self, topics):
@@ -96,15 +97,16 @@ class EpicsKafkaProducer(KafkaProducerBase):
                 for sensor in self.sensors_pv_objects:
                     topic = sensor
                     pv_list = self.sensors[sensor]
-                    channels = {pv_list[i]:self.sensors_pv_objects[i].get() for i in range(len(pv_list))}
-                    timestamp = self.sensors_pv_objects[0].timestamp
+                    channels = {pv_list[i]:self.sensors_pv_objects[sensor][i].get() for i in range(len(pv_list))}
+                    timestamp = self.sensors_pv_objects[sensor][0].timestamp
                     message = {'timestamp': timestamp, 'channels':channels, 'source_topic':topic}
-                    
+                    message = json.dumps(message)
                     # Convert EPICS topic to valid Kafka topic name
-                    kafka_topic = self.sanitize_topic_name(mqtt_topic)
+                    kafka_topic = self.sanitize_topic_name(topic)
                     
                     logging.info(f"EPICS received from '{topic}' timestamp {timestamp}: ", channels)
                     
+                    print(f"Type of kafka message: {type(message)}")
                     # Send to Kafka using base class method
                     record_metadata = self.send_to_kafka(kafka_topic, message)
                     
