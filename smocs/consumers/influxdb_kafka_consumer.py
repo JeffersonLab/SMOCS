@@ -154,8 +154,7 @@ class InfluxDBConsumer(KafkaConsumerBase):
         try:
             data = message['channels']
             
-            point = Point("FlowRates") \
-                .tag("topic", topic) \
+            point = Point(topic) \
             
             for key, value in data.items():
                 point.field(key, value)
