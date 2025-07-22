@@ -10,8 +10,5 @@ RUN pip install -r requirements.txt
 COPY smocs ./smocs
 COPY orchestration/config.yaml ./config.yaml
 
-# Copy configuration file
-COPY orchestration/config.yaml ./config.yaml
-
 # Set Python path
 ENV PYTHONPATH=/app
