@@ -117,23 +117,6 @@ class EpicsKafkaProducer(KafkaProducerBase):
             logging.error(f"Error: {e}")
             self.cleanup()
             raise
-    
-    def cleanup(self):
-        """
-        Clean up MQTT and Kafka resources.
-        """
-        # Disconnect MQTT client
-        
-        try:
-            for sensor in self.sensors_pv_objects:
-                for pv in self.sensors_pv_objects[sensor]:
-                    pv.disconnect()
-            logging.info("EPICS PVs disconnected")
-        except Exception as e:
-            logging.error(f"Error disconnecting EPICS: {e}")
-        
-        # Call base class cleanup for Kafka resources
-        super().cleanup()
 
 
 def main():
