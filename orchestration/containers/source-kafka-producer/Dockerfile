@@ -8,6 +8,7 @@ RUN pip install -r requirements.txt
 
 # Copy the entire smocs package (from root build context)
 COPY smocs ./smocs
+COPY orchestration/config.yaml ./config.yaml
 
 # Copy configuration file
 COPY orchestration/config.yaml ./config.yaml
