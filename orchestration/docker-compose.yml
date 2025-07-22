@@ -92,7 +92,18 @@ services:
       kafka-broker:
         condition: service_healthy
     restart: unless-stopped
+
+  epics-kafka-producer:
+    extends: source-kafka-producer
+    profiles: ["epics"]
     command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
+
+  mqtt-kafka-producer:
+    extends: source-kafka-producer
+    profiles: ["mqtt"]
+    command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
+
+    
 
   grafana:
     image: grafana/grafana:12.0.2
