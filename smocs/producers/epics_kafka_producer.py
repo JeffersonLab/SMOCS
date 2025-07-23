@@ -47,28 +47,6 @@ class EpicsKafkaProducer(KafkaProducerBase):
         
         logging.info(f"EPICS: {os.environ['EPICS_CA_ADDR_LIST']}")
         logging.info(f"EPICS reading pvs: {self.pv_list}")
-        
-        
-    
-    def sanitize_topic_name(self, topics):
-        """
-        Convert MQTT topic to valid Kafka topic name.
-        
-        Args:
-            mqtt_topic (str): Original MQTT topic name
-            
-        Returns:
-            str: Sanitized Kafka topic name
-        """
-        # Replace forward slashes with dots and remove/replace invalid characters
-        kafka_topic = topics.replace('/', '.').replace('#', 'wildcard').replace('+', 'plus')
-        # Remove any other invalid characters and ensure it starts with alphanumeric
-        kafka_topic = ''.join(c if c.isalnum() or c in '.-_' else '_' for c in kafka_topic)
-        # No starting with a dot or dash
-        if kafka_topic.startswith('.') or kafka_topic.startswith('-'):
-            kafka_topic = 'topic_' + kafka_topic
-            
-        return kafka_topic
     
     
     def start(self):

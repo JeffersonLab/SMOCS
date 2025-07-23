@@ -87,6 +87,26 @@ class KafkaProducerBase(ABC):
             
         except Exception as e:
             logging.warning(f"Could not create topic {topic_name}: {e}")
+            
+    def sanitize_topic_name(self, topics):
+        """
+        Convert generic topic to valid Kafka topic name.
+        
+        Args:
+            topic (str): Original Source topic name
+            
+        Returns:
+            str: Sanitized Kafka topic name
+        """
+        # Replace forward slashes with dots and remove/replace invalid characters
+        kafka_topic = topics.replace('/', '.').replace('#', 'wildcard').replace('+', 'plus')
+        # Remove any other invalid characters and ensure it starts with alphanumeric
+        kafka_topic = ''.join(c if c.isalnum() or c in '.-_' else '_' for c in kafka_topic)
+        # No starting with a dot or dash
+        if kafka_topic.startswith('.') or kafka_topic.startswith('-'):
+            kafka_topic = 'topic_' + kafka_topic
+            
+        return kafka_topic
     
     def send_to_kafka(self, topic_name, message, key=None):
         """
