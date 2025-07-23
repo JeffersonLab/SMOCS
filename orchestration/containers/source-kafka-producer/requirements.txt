@@ -1,3 +1,4 @@
 kafka-python==2.0.2
 paho-mqtt==1.6.1
-PyYAML==6.0.1
+pyepics==3.5.8
+PyYAML==6.0.2

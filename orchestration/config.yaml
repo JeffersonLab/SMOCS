@@ -1,3 +1,5 @@
+source: "epics"
+
 mqtt:
   topics:      
     - topic: "bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading"
@@ -12,6 +14,16 @@ mqtt:
         rate3_low: "rate3.alarm.limits.low"
         rate3_high: "rate3.alarm.limits.high"
       timestamp_path: "timeStamp"
+
+epics:
+    source: CEBAF
+    PVs:
+      - IPM9A01.XPOS
+      - IPM9A01.YPOS
+      - IPM9A01.PHAS
+      - IPM9A02.XPOS
+      - IPM9A02.YPOS
+      - IPM9A02.PHAS
 
 kafka:
   auto_create: true
