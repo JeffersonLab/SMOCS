@@ -59,12 +59,7 @@ services:
       dockerfile: ./orchestration/containers/source-kafka-producer/Dockerfile
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
-      MQTT_BROKER: ${MQTT_BROKER}
-      MQTT_PORT: ${MQTT_PORT:-1883}
-      MQTT_USERNAME: ${MQTT_USERNAME}
-      MQTT_PASSWORD: ${MQTT_PASSWORD}
       CONFIG_PATH: /app/config.yaml
-      EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
       PYTHONPATH: /app
     networks:
       - kafka-net
@@ -76,11 +71,18 @@ services:
   epics-kafka-producer:
     extends: source-kafka-producer
     profiles: ["epics"]
+    environment:
+      EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
     command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
 
   mqtt-kafka-producer:
     extends: source-kafka-producer
     profiles: ["mqtt"]
+    environment:
+      MQTT_BROKER: ${MQTT_BROKER}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
     command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
 
     
