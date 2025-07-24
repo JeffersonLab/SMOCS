@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 from smocs.cores import KafkaConsumerBase, KafkaProducerBase
 
-class KafkaStreamProcessorBase(KafkaConsumerBase):
+class KafkaStreamingProcessBase(KafkaConsumerBase):
     """
     Abstract base class for Kafka stream processors.
     
