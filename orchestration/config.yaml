@@ -1,4 +1,4 @@
-source: "epics"
+source: "gymnasium"
 
 mqtt:
   topics:      
@@ -24,6 +24,17 @@ epics:
       - IPM9A02.XPOS
       - IPM9A02.YPOS
       - IPM9A02.PHAS
+
+gymnasium:
+  environment: "CartPole-v1"
+  input_topic: "gym-actions"
+  output_topic: "gym-observations"
+  blocking_mode: false
+  default_action_strategy: "random"
+  step_delay: 0.1
+  reset_on_start: true
+  max_episode_steps: null  # null uses environment default
+  render_mode: null        # "human", "rgb_array", or null
 
 kafka:
   auto_create: true

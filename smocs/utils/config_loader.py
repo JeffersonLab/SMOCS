@@ -50,6 +50,51 @@ class ConfigLoader:
                 return config
         return None
     
+    # Gymnasium Configuration Methods
+    def has_gymnasium_config(self) -> bool:
+        return 'gymnasium' in self.config
+    
+    def get_gymnasium_environment(self) -> str:
+        return self.config.get('gymnasium', {}).get('environment', 'CartPole-v1')
+    
+    def get_gymnasium_input_topic(self) -> str:
+        return self.config.get('gymnasium', {}).get('input_topic', 'gym-actions')
+    
+    def get_gymnasium_output_topic(self) -> str:
+        return self.config.get('gymnasium', {}).get('output_topic', 'gym-observations')
+    
+    def get_gymnasium_blocking_mode(self) -> bool:
+        return self.config.get('gymnasium', {}).get('blocking_mode', True)
+    
+    def get_gymnasium_default_action_strategy(self) -> str:
+        return self.config.get('gymnasium', {}).get('default_action_strategy', 'random')
+    
+    def get_gymnasium_step_delay(self) -> float:
+        return self.config.get('gymnasium', {}).get('step_delay', 0.0)
+    
+    def get_gymnasium_reset_on_start(self) -> bool:
+        return self.config.get('gymnasium', {}).get('reset_on_start', True)
+    
+    def get_gymnasium_max_episode_steps(self) -> Optional[int]:
+        return self.config.get('gymnasium', {}).get('max_episode_steps')
+    
+    def get_gymnasium_render_mode(self) -> Optional[str]:
+        return self.config.get('gymnasium', {}).get('render_mode')
+    
+    def get_gymnasium_config(self) -> Dict[str, Any]:
+        """Get complete gymnasium configuration with defaults"""
+        return {
+            'environment': self.get_gymnasium_environment(),
+            'input_topic': self.get_gymnasium_input_topic(),
+            'output_topic': self.get_gymnasium_output_topic(),
+            'blocking_mode': self.get_gymnasium_blocking_mode(),
+            'default_action_strategy': self.get_gymnasium_default_action_strategy(),
+            'step_delay': self.get_gymnasium_step_delay(),
+            'reset_on_start': self.get_gymnasium_reset_on_start(),
+            'max_episode_steps': self.get_gymnasium_max_episode_steps(),
+            'render_mode': self.get_gymnasium_render_mode()
+        }
+    
     # Kafka Configuration Methods
     def get_kafka_auto_create(self) -> bool:
         return self.config.get('kafka', {}).get('auto_create', True)

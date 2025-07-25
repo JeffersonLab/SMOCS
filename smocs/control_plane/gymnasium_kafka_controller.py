@@ -1,0 +1,520 @@
+import json
+import logging
+import time
+import os
+import numpy as np
+from typing import List, Tuple, Union, Callable, Any
+import gymnasium as gym
+
+from smocs.cores import KafkaStreamingProcessBase
+from smocs.utils import ConfigLoader
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+
+class KafkaGymWrapper(KafkaStreamingProcessBase):
+    """
+    Kafka-controlled Gymnasium environment wrapper with configuration support.
+    
+    This wrapper allows any Gymnasium environment to be controlled via Kafka messages.
+    It can operate in two modes:
+    
+    1. Blocking mode: Waits for actions from Kafka before stepping the environment
+    2. Default action mode: Runs continuously using default actions when no Kafka action is received
+    
+    The wrapper sends complete RL transition tuples (state, action, reward, next_state, done, truncated, info)
+    back to Kafka after each environment step.
+    """
+    
+    def __init__(self, config_path: str = None):
+        """
+        Initialize the Kafka Gym wrapper with configuration.
+        
+        Args:
+            config_path: Path to configuration file (uses environment variable if None)
+        """
+        # Load configuration
+        config_path = config_path or os.getenv('CONFIG_PATH', '/app/config.yaml')
+        self.config_loader = ConfigLoader(config_path)
+        
+        # Validate gymnasium configuration exists
+        if not self.config_loader.has_gymnasium_config():
+            raise ValueError("No gymnasium configuration found in config file")
+        
+        # Get gymnasium configuration
+        self.gym_config = self.config_loader.get_gymnasium_config()
+        
+        # Kafka configuration from environment
+        kafka_broker_url = os.environ.get('KAFKA_BROKER_URL', 'kafka-broker:9092')
+        group_id = os.environ.get('KAFKA_GROUP_ID', 'gym-wrapper')
+        
+        # Extract topics from config
+        input_topic = self.gym_config['input_topic']
+        self.output_topic = self.gym_config['output_topic']
+        
+        # Store configuration
+        self.blocking_mode = self.gym_config['blocking_mode']
+        self.default_action_strategy = self.gym_config['default_action_strategy']
+        self.step_delay = self.gym_config['step_delay']
+        self.reset_on_start = self.gym_config['reset_on_start']
+        
+        # Initialize streaming processor to listen to input topic
+        super().__init__(kafka_broker_url, group_id, [input_topic])
+        
+        # Initialize gymnasium environment
+        self.env = self._create_environment()
+        
+        # Environment state
+        self.current_obs = None
+        self.episode_step = 0
+        self.episode_num = 0
+        self.total_steps = 0
+        
+        logging.info(f"Kafka Gym Wrapper initialized:")
+        logging.info(f"  Environment: {self.gym_config['environment']}")
+        logging.info(f"  Input topic: {input_topic}")
+        logging.info(f"  Output topic: {self.output_topic}")
+        logging.info(f"  Blocking mode: {self.blocking_mode}")
+        logging.info(f"  Default action strategy: {self.default_action_strategy}")
+        logging.info(f"  Step delay: {self.step_delay}s")
+        logging.info(f"  Action space: {self.env.action_space}")
+        logging.info(f"  Observation space: {self.env.observation_space}")
+    
+    def _create_environment(self) -> gym.Env:
+        """
+        Create and configure the gymnasium environment.
+        
+        Returns:
+            Configured gymnasium environment
+        """
+        try:
+            env_name = self.gym_config['environment']
+            render_mode = self.gym_config['render_mode']
+            max_episode_steps = self.gym_config['max_episode_steps']
+            
+            # Create environment with optional render mode
+            env_kwargs = {}
+            if render_mode:
+                env_kwargs['render_mode'] = render_mode
+            
+            env = gym.make(env_name, **env_kwargs)
+            
+            # Set max episode steps if specified
+            if max_episode_steps is not None:
+                env._max_episode_steps = max_episode_steps
+            
+            logging.info(f"Created gymnasium environment: {env_name}")
+            if render_mode:
+                logging.info(f"Render mode: {render_mode}")
+            if max_episode_steps:
+                logging.info(f"Max episode steps: {max_episode_steps}")
+            
+            return env
+            
+        except Exception as e:
+            logging.error(f"Failed to create gymnasium environment '{self.gym_config['environment']}': {e}")
+            raise
+    
+    def get_default_action(self):
+        """
+        Generate a default action based on the configured strategy.
+        
+        Returns:
+            Action compatible with the environment's action space
+        """
+        if self.default_action_strategy == 'random':
+            return self.env.action_space.sample()
+        elif self.default_action_strategy == 'zero':
+            if hasattr(self.env.action_space, 'shape'):
+                return np.zeros(self.env.action_space.shape, dtype=self.env.action_space.dtype)
+            else:
+                # Discrete action space
+                return 0
+        else:
+            raise ValueError(f"Unknown default action strategy: {self.default_action_strategy}")
+    
+    def parse_action(self, message: str):
+        """
+        Parse action from Kafka message.
+        
+        Args:
+            message: JSON string containing action data
+            
+        Returns:
+            Action compatible with environment's action space
+            
+        Raises:
+            ValueError: If message cannot be parsed or action is invalid
+        """
+        try:
+            data = json.loads(message)
+            
+            # Handle different message formats
+            if 'action' in data:
+                action = data['action']
+            elif isinstance(data, (list, int, float)):
+                action = data
+            else:
+                raise ValueError(f"No 'action' field found in message: {data}")
+            
+            # Convert to numpy array if needed for continuous spaces
+            if hasattr(self.env.action_space, 'shape') and isinstance(action, list):
+                action = np.array(action)
+            
+            # Validate action is in action space
+            if not self.env.action_space.contains(action):
+                logging.warning(f"Action {action} not in action space {self.env.action_space}")
+                # Use default action instead
+                return self.get_default_action()
+            
+            return action
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in action message: {e}")
+        except Exception as e:
+            raise ValueError(f"Error parsing action: {e}")
+    
+    def create_step_data(self, state, action, reward, next_state, done, truncated, info):
+        """
+        Create step data dictionary for sending to Kafka in the expected InfluxDB format.
+        Flattens arrays while preserving shape information for reconstruction.
+        
+        Args:
+            state: Current observation
+            action: Action taken
+            reward: Reward received
+            next_state: Next observation
+            done: Episode done flag
+            truncated: Episode truncated flag
+            info: Additional info dictionary
+            
+        Returns:
+            Dictionary containing step data in InfluxDB consumer format with flattened arrays
+        """
+        # Convert numpy arrays to lists for JSON serialization
+        def convert_for_json(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            elif isinstance(obj, dict):
+                return {k: convert_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_for_json(item) for item in obj]
+            else:
+                return obj
+        
+        def flatten_array_with_shape(arr, prefix):
+            """
+            Flatten an array and return both flattened fields and shape info.
+            
+            Args:
+                arr: Array to flatten (list or scalar)
+                prefix: Field prefix (e.g., 'state', 'action')
+                
+            Returns:
+                dict: Flattened fields and shape information
+            """
+            converted = convert_for_json(arr)
+            fields = {}
+            
+            if isinstance(converted, list):
+                # Multi-dimensional: flatten to indexed fields
+                for i, val in enumerate(converted):
+                    fields[f"{prefix}_{i}"] = float(val) if isinstance(val, (int, float)) else val
+                
+                # Add shape information
+                fields[f"{prefix}_shape"] = len(converted)
+                fields[f"{prefix}_is_array"] = True
+                
+                # Add summary statistics for numeric arrays
+                if all(isinstance(x, (int, float)) for x in converted):
+                    numeric_vals = [float(x) for x in converted]
+                    fields[f"{prefix}_mean"] = sum(numeric_vals) / len(numeric_vals)
+                    fields[f"{prefix}_min"] = min(numeric_vals)
+                    fields[f"{prefix}_max"] = max(numeric_vals)
+                    fields[f"{prefix}_std"] = (sum((x - fields[f"{prefix}_mean"]) ** 2 for x in numeric_vals) / len(numeric_vals)) ** 0.5
+            else:
+                # Scalar: store directly
+                fields[prefix] = float(converted) if isinstance(converted, (int, float)) else converted
+                fields[f"{prefix}_shape"] = 1
+                fields[f"{prefix}_is_array"] = False
+            
+            return fields
+        
+        # Create channels dictionary with all gymnasium data
+        channels = {
+            "reward": float(reward),
+            "done": bool(done),
+            "truncated": bool(truncated),
+            "episode": self.episode_num,
+            "episode_step": self.episode_step,
+            "total_steps": self.total_steps,
+            "environment": self.gym_config['environment']
+        }
+        
+        # Flatten state with shape information
+        state_fields = flatten_array_with_shape(state, "state")
+        channels.update(state_fields)
+        
+        # Flatten next_state with shape information
+        next_state_fields = flatten_array_with_shape(next_state, "next_state")
+        channels.update(next_state_fields)
+        
+        # Flatten action with shape information
+        action_fields = flatten_array_with_shape(action, "action")
+        channels.update(action_fields)
+        
+        # Add reward shape info (always scalar but for consistency)
+        channels["reward_shape"] = 1
+        channels["reward_is_array"] = False
+        
+        # Add info fields if they exist and are simple types
+        converted_info = convert_for_json(info)
+        if isinstance(converted_info, dict):
+            for key, value in converted_info.items():
+                # Only add simple numeric/boolean values
+                if isinstance(value, (int, float, bool)):
+                    channels[f"info_{key}"] = float(value) if isinstance(value, (int, float)) else value
+                    channels[f"info_{key}_shape"] = 1
+                    channels[f"info_{key}_is_array"] = False
+                elif isinstance(value, list) and all(isinstance(v, (int, float)) for v in value):
+                    # Handle simple numeric arrays in info
+                    info_fields = flatten_array_with_shape(value, f"info_{key}")
+                    channels.update(info_fields)
+        
+        # Create the final message in the expected format
+        step_data = {
+            "channels": channels,
+            "timestamp": time.time(),
+            "source_topic": self.output_topic
+        }
+        
+        return step_data
+    
+    def step_environment(self, action):
+        """
+        Execute one step in the environment and send results to Kafka.
+        
+        Args:
+            action: Action to execute
+            
+        Returns:
+            Tuple indicating success and any outputs to send
+        """
+        try:
+            # Reset environment if needed (this logic handles the reset after done)
+            if self.current_obs is None:
+                self.current_obs, info = self.env.reset()
+                logging.info(f"Reset environment - Episode {self.episode_num}")
+            
+            # Execute environment step
+            next_obs, reward, done, truncated, info = self.env.step(action)
+            
+            # Create kafka message with step data
+            step_data = self.create_step_data(
+                self.current_obs, action, reward, next_obs, done, truncated, info
+            )
+            
+            # Update counters and state
+            self.episode_step += 1
+            self.total_steps += 1
+            self.current_obs = next_obs
+            
+            logging.info(f"Step {self.total_steps} (Episode {self.episode_num}, Step {self.episode_step}): "
+                        f"Action={action}, Reward={reward:.3f}, Done={done}, Truncated={truncated}")
+            
+            if done or truncated:
+                logging.info(f"Episode {self.episode_num} finished after {self.episode_step} steps. "
+                           f"Final reward: {reward:.3f}")
+                self.current_obs = None  # Will trigger reset on next step
+                self.episode_num += 1
+                self.episode_step = 0
+            
+            # Add delay if specified
+            if self.step_delay > 0:
+                time.sleep(self.step_delay)
+            
+            # Convert to Kafka topic name and return data to send
+            kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
+            return True, [(kafka_topic, json.dumps(step_data))]
+            
+        except Exception as e:
+            logging.error(f"Error stepping environment: {e}")
+            return False, []
+    
+    def step_with_default_action(self):
+        """
+        Execute environment step with default action and send results to Kafka.
+        Used in non-blocking mode when no Kafka action is received.
+        """
+        try:
+            action = self.get_default_action()
+            success, outputs = self.step_environment(action)
+            
+            # Send outputs directly since we're not returning from process_message
+            if success and outputs:
+                for topic, message in outputs:
+                    self.producer.send_to_kafka(topic, message)
+                    
+        except Exception as e:
+            logging.error(f"Error in default action step: {e}")
+    
+    def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
+        """
+        Process action message from Kafka and execute environment step.
+        
+        This method is called by KafkaStreamingProcessBase when a message is received.
+        
+        Args:
+            message: The message value (JSON string with action)
+            topic: The topic name
+            partition: The partition number
+            offset: The message offset
+            
+        Returns:
+            Tuple[bool, List[Tuple]]: Success status and list of outputs to send to Kafka
+        """
+        try:
+            # Parse action from Kafka message
+            action = self.parse_action(message)
+            logging.debug(f"Received action from Kafka: {action}")
+            
+            # Execute environment step
+            return self.step_environment(action)
+            
+        except ValueError as e:
+            logging.error(f"Invalid action message from topic {topic}: {e}")
+            logging.error(f"Message content: {message}")
+            return False, []
+        except Exception as e:
+            logging.error(f"Error processing action message: {e}")
+            return False, []
+    
+    def start(self):
+        """
+        Start the Kafka Gym wrapper.
+        
+        This extends the base class start method to handle initial environment reset.
+        """
+        try:
+            logging.info("Starting Kafka Gym wrapper...")
+            
+            # Reset environment if configured to do so
+            if self.reset_on_start:
+                self.current_obs, info = self.env.reset()
+                logging.info("Environment reset on startup")
+            
+            # Call parent start method which sets up Kafka and begins consumption
+            super().start()
+            
+        except Exception as e:
+            logging.error(f"Error starting Kafka Gym wrapper: {e}")
+            self.cleanup()
+            raise
+    
+    def consume_messages(self):
+        """
+        Main consumption loop with support for blocking and non-blocking modes.
+        
+        Overrides the base class method to add default action handling
+        when operating in non-blocking mode.
+        """
+        logging.info(f"Starting Kafka Gym wrapper loop (blocking_mode={self.blocking_mode})...")
+        
+        while self.running:
+            try:
+                # Poll for messages with timeout
+                message_batch = self.consumer.poll(timeout_ms=1000)
+                
+                if message_batch:
+                    # Process Kafka actions normally
+                    for topic_partition, messages in message_batch.items():
+                        for message in messages:
+                            try:
+                                success, outputs = self.process_message(
+                                    message=message.value,
+                                    topic=message.topic,
+                                    partition=message.partition,
+                                    offset=message.offset
+                                )
+                                
+                                if not success:
+                                    logging.warning(f"Message processing failed for topic {message.topic}, offset {message.offset}")
+                                    continue
+                                
+                                # Send outputs to Kafka
+                                if outputs:
+                                    for output in outputs:
+                                        try:
+                                            if len(output) == 2:
+                                                topic, message_content = output
+                                                key = None
+                                            elif len(output) == 3:
+                                                topic, message_content, key = output
+                                            else:
+                                                raise ValueError(f"Invalid output tuple length: {len(output)}")
+                                            
+                                            record_metadata = self.producer.send_to_kafka(topic, message_content, key)
+                                            logging.debug(f"Sent step data to topic '{topic}' - partition {record_metadata.partition}, offset {record_metadata.offset}")
+                                            
+                                        except Exception as e:
+                                            logging.error(f"Failed to send output tuple {output}: {e}")
+                                
+                            except Exception as e:
+                                logging.error(f"Error processing message from topic {message.topic}: {e}")
+                                self.handle_processing_error(e, message)
+                else:
+                    # No messages received
+                    if self.blocking_mode:
+                        # In blocking mode, just continue waiting
+                        continue
+                    else:
+                        # In non-blocking mode, use default action
+                        self.step_with_default_action()
+                
+            except Exception as e:
+                logging.error(f"Error in consumption loop: {e}")
+                time.sleep(1)
+    
+    def cleanup(self):
+        """
+        Clean up environment and Kafka resources.
+        """
+        # Close gymnasium environment
+        if hasattr(self, 'env') and self.env:
+            try:
+                self.env.close()
+                logging.info("Gymnasium environment closed")
+            except Exception as e:
+                logging.error(f"Error closing gymnasium environment: {e}")
+        
+        # Call base class cleanup for Kafka resources
+        super().cleanup()
+
+
+def main():
+    """
+    Main entry point for the Gymnasium Kafka controller.
+    """
+    logging.info("Starting Gymnasium Kafka Controller...")
+    
+    try:
+        # Create and start the controller
+        controller = KafkaGymWrapper()
+        controller.start()
+        
+    except KeyboardInterrupt:
+        logging.info("Received shutdown signal...")
+    except Exception as e:
+        logging.error(f"Error in Gymnasium controller: {e}")
+        raise
+    finally:
+        logging.info("Gymnasium Kafka Controller stopped")
+
+
+if __name__ == "__main__":
+    main()
