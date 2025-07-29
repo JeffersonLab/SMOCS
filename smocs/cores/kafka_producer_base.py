@@ -147,17 +147,14 @@ class KafkaProducerBase(ABC):
             logging.error(f"Error sending message to Kafka topic {topic_name}: {e}")
             raise
     
-    @abstractmethod
     def start(self):
         """
-        Start the producer. Must be implemented by subclasses.
-        
-        This method should:
-        1. Call setup_kafka_producer()
-        2. Setup the specific data source (MQTT, HTTP, etc.)
-        3. Start the main processing loop
+        Default start implementation that just sets up the producer.
+        Subclasses can override this if they need custom startup logic.
         """
-        pass
+        logging.info("Starting Kafka producer...")
+        self.setup_kafka_producer()
+        logging.info("Kafka producer ready")
     
     def cleanup(self):
         """

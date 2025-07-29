@@ -29,7 +29,7 @@ class MQTTKafkaProducer(KafkaProducerBase):
         self.config_loader = ConfigLoader(config_path)
         
         # Validate MQTT configuration exists
-        if not self.config_loader.has_mqtt_config():
+        if not self.config_loader.has_config(name='mqtt'):
             raise ValueError("No MQTT configuration found in config file")
         
         # Initialize base class

@@ -1,4 +1,4 @@
-source: "epics"
+source: "gymnasium"
 
 mqtt:
   topics:      
@@ -25,10 +25,21 @@ epics:
       - IPM9A02.YPOS
       - IPM9A02.PHAS
 
+gymnasium:
+  environment: "HalfCheetah-v4"
+  input_topic: "gymnasium-action"
+  output_topic: "gymnasmium-output"
+  blocking_mode: false
+  default_action_strategy: "random"
+  step_delay: 0.1
+  reset_on_start: true
+  max_episode_steps: null  # null uses environment default
+  render_mode: null        # "human", "rgb_array", or null
+
 kafka:
   auto_create: true
   partitions: 1
   replication_factor: 1
 
 project:
-  name: "smocs-fnal-streaming"
+  name: "smocs-gym-streaming"

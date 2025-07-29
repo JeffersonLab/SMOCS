@@ -57,6 +57,7 @@ services:
     build:
       context: ../
       dockerfile: ./orchestration/containers/source-kafka-producer/Dockerfile
+    profiles: ["mqtt", "epics"]
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
       CONFIG_PATH: /app/config.yaml
@@ -85,7 +86,23 @@ services:
       MQTT_PASSWORD: ${MQTT_PASSWORD}
     command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
 
-    
+  gymnasium-kafka-controller:
+    build:
+      context: ../
+      dockerfile: ./orchestration/containers/gymnasium-kafka-controller/Dockerfile
+    profiles: ["gymnasium"]
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_URL: kafka-broker:9092
+      KAFKA_GROUP_ID: gym-wrapper
+      CONFIG_PATH: /app/config.yaml
+      PYTHONPATH: /app
+    networks:
+      - kafka-net
+    restart: unless-stopped
+    command: ["python", "-m", "smocs.control_plane.gymnasium_kafka_controller"]
 
   grafana:
     image: grafana/grafana:12.0.2
