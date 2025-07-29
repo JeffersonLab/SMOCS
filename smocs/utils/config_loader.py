@@ -16,10 +16,10 @@ class ConfigLoader:
             
         return config or {}
     
-    # MQTT Configuration Methods
-    def has_mqtt_config(self) -> bool:
-        return 'mqtt' in self.config and 'topics' in self.config['mqtt']
+    def has_config(self, name='') -> bool:
+        return name in self.config
     
+    # MQTT Configuration Methods
     def get_mqtt_topic_configs(self) -> List[Dict[str, Any]]:
         """Returns list of topic configurations with validation"""
         if not self.has_mqtt_config():
@@ -51,9 +51,6 @@ class ConfigLoader:
         return None
     
     # Gymnasium Configuration Methods
-    def has_gymnasium_config(self) -> bool:
-        return 'gymnasium' in self.config
-    
     def get_gymnasium_environment(self) -> str:
         return self.config.get('gymnasium', {}).get('environment', 'CartPole-v1')
     

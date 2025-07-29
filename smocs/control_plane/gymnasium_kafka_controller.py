@@ -41,7 +41,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         self.config_loader = ConfigLoader(config_path)
         
         # Validate gymnasium configuration exists
-        if not self.config_loader.has_gymnasium_config():
+        if not self.config_loader.has_config(name='gymnasium'):
             raise ValueError("No gymnasium configuration found in config file")
         
         # Get gymnasium configuration

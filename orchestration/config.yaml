@@ -26,9 +26,9 @@ epics:
       - IPM9A02.PHAS
 
 gymnasium:
-  environment: "CartPole-v1"
-  input_topic: "gym-actions"
-  output_topic: "gym-observations"
+  environment: "HalfCheetah-v4"
+  input_topic: "gymnasium-action"
+  output_topic: "gymnasmium-output"
   blocking_mode: false
   default_action_strategy: "random"
   step_delay: 0.1
@@ -42,4 +42,4 @@ kafka:
   replication_factor: 1
 
 project:
-  name: "smocs-fnal-streaming"
+  name: "smocs-gym-streaming"
