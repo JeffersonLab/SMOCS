@@ -273,8 +273,8 @@ class DBManager:
                 
                 for key in batch:
                     batch[key].append([results[i][key] for i in range(len(results))])
-                           
-            required_samples = required_samples - len(batch)
+            key = list(batch.keys())[0]
+            required_samples = required_samples - len(batch[key])
             
         for key in batch:
             batch[key] = np.array(batch[key])
