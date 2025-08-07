@@ -9,6 +9,7 @@ import mysql.connector as mysql
 import numpy as np
 import decimal
 import time
+import pickle
 
 class DBManager:
 
@@ -50,7 +51,7 @@ class DBManager:
         return self.mydb.is_connected()
         
 
-    def execute_and_commit(self, query):
+    def execute_and_commit(self, query, values=None):
         """
         Executes a SQL query and commits the changes to the database.
 
@@ -65,7 +66,11 @@ class DBManager:
         """
         status = 1
         try:
-            self.db_cursor.execute(query)
+            if values is not None:
+                self.db_cursor.execute(query, values)
+            else:
+                self.db_cursor.execute(query)
+
             self.mydb.commit()
             status = 0
         except Exception as e:
@@ -136,9 +141,9 @@ class DBManager:
         CREATE TABLE IF NOT EXISTS agent_inferences (id INT AUTO_INCREMENT PRIMARY KEY, 
                                                                 state_source_timestamp DATETIME(6) NOT NULL, 
                                                                 state_received_timestamp DATETIME(6) NOT NULL,
-                                                                prediction_timestamp DATETIME(6) NOT NULL, 
                                                                 state BLOB NOT NULL, 
-                                                                prediction BLOB NOT NULL)
+                                                                prediction_timestamp DATETIME(6), 
+                                                                prediction BLOB)
         """
         self.execute_and_commit(query)
 
@@ -147,11 +152,13 @@ class DBManager:
                                                 id INT AUTO_INCREMENT PRIMARY KEY,
                                                 state_id INT NOT NULL,
                                                 action_success BOOL,
-                                                reward FLOAT,
+                                                reward FLOAT NOT NULL,
                                                 next_state_source_timestamp DATETIME(6) NOT NULL,
                                                 next_state_received_timestamp DATETIME(6) NOT NULL,
                                                 next_state BLOB NOT NULL,
-                                                done BOOL,
+                                                terminate BOOL NOT NULL,
+                                                truncate BOOL NOT NULL,
+                                                info, BLOB,
                                                 FOREIGN KEY (state_id) REFERENCES agent_inferences(id)
                                             )
         """
@@ -164,7 +171,14 @@ class DBManager:
             for key in result:
                 if type(result[key]) is decimal.Decimal:
                     result[key] = float(result[key])
-                # TODO: add more types
+                if type(result[key]) is bytes:
+                    try:
+                        result[key] = np.frombuffer(result[key], dtype=np.float64)
+                    except ValueError:
+                        try:
+                            result[key] = pickle.loads(result[key])
+                        except pickle.UnpicklingError:
+                            print(f"Could not unpickle data for key: {key}")
                 
             parsed_results.append(result)
         return np.array(parsed_results)
@@ -205,9 +219,10 @@ class DBManager:
         
         """
         if agent_type.lower() != "controls":
-            query = f"SELECT ai.state, ar.next_state FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {segment_length}"
+            # query = f"SELECT ai.state_source_timestamp, ai.state, ar.next_state FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {segment_length}"
+            query = f"SELECT state_source_timestamp, state FROM agent_inferences WHERE state_source_timestamp >= '{window_time_seed}' ORDER BY state_source_timestamp LIMIT {segment_length}"
         else:
-            query = f"SELECT ai.state, ai.prediction, ar.next_state, ar.reward, ar.truncate, ar.terminate FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {segment_length}"
+            query = f"SELECT ai.state_source_timestamp, ai.state, ai.prediction, ar.next_state, ar.reward, ar.truncate, ar.terminate FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {segment_length}"
 
         try:
             self.db_cursor.execute(query)
@@ -229,12 +244,13 @@ class DBManager:
         """
         
         batch = {'state_source_timestamp': [],
-                              'state': [],
-                              'prediction': [],
-                              'next_state': []}
+                              'state': []}
         if agent_type.lower() == "controls":
+            batch['prediction'] = []
+            batch['next_state'] = []
             batch['reward'] = []
-            batch['done'] = []
+            batch['terminate'] = []
+            batch['truncate'] = []
 
         required_samples = batch_size
         
@@ -242,10 +258,10 @@ class DBManager:
             
             timestamps = self.get_timestamps(window_size=segment_length,
                                              mode=mode,
-                                             n=batch_size)
+                                             n=required_samples)
             # print("parsed results after get timestamps: ", parsed_results)
             for result in timestamps:
-                window_seed = result['ai.state_source_timestamp']
+                window_seed = result['state_source_timestamp']
                 results = self.sample_sequence(window_time_seed=window_seed,
                                                agent_type=agent_type,
                                                segment_length=segment_length)
@@ -253,12 +269,11 @@ class DBManager:
                 if results is None:
                     raise ValueError("No results found for the given window seed.")
                 
-                for result in results:
-                    for key in batch:
-                        batch[key].append(result[key])
-                    
+                print("results: ", results)
                 
-
+                for key in batch:
+                    batch[key].append([results[i][key] for i in range(len(results))])
+                           
             required_samples = required_samples - len(batch)
             
         for key in batch:
@@ -276,16 +291,83 @@ class DBManager:
         query = f"INSERT INTO agent_inferences "
         query_columns = "("
         query_values = "("
+        values = []
         for key in data:
-            if not isinstance(data[key], float):
-                print(f"Data for {key} is not a float, skipping...")
-                continue
+            if key in ['state', 'prediction'] and data[key] is not None:
+                data[key] = data[key].tostring()
+
             query_columns+= f"{key}, "
-            query_values += f"'{data[key]}', "
+            query_values += f"%s, "
+            values.append(data[key]) 
         query += query_columns[:-2] + ") VALUES " + query_values[:-2] + ")"
+        
+        status = self.execute_and_commit(query, values=tuple(values)) 
             
-        status = self.execute_and_commit(query)    
+        return status
+    
+    def get_state_id(self, source_timestamp):
+        """
+        Retrieves the state ID based on the source timestamp.
+
+        Args:
+            source_timestamp (str): The source timestamp to search for.
+
+        Returns:
+            int: The state ID corresponding to the given source timestamp.
+        """
+        query = f"SELECT id FROM agent_inferences WHERE state_source_timestamp = '{source_timestamp}'"
+        results = self.execute_query(query)
+        
+        if len(results) == 0:
+            print(f"No state found for source timestamp: {source_timestamp}")
+            return None
+        elif len(results) > 1:
+            print(f"Multiple states found for source timestamp: {source_timestamp}, returning the first one.")
+            return [int(results[i]['id']) for i in range(len(results))]
+        
+        return int(results[0]['id'])
+    
+    def record_prediction(self, prediction, prediction_timestamp, key_value, key="state_source_timestamp"):
+        assert isinstance(prediction, np.ndarray), "Prediction must be a numpy array"
+        assert key in ['state_source_timestamp', 'state_id'], f"Key must be one of 'state_source_timestamp' or 'state_id', got {key}"
+        
+        query = f"UPDATE agent_inferences set prediction = %s, prediction_timestamp = '{prediction_timestamp}' WHERE {key} = %s"
+        values = (prediction.tostring(), key_value)
+        
+        status = self.execute_and_commit(query, values=values)    
             
+        return status
+    
+    def record_controls_tuple(self, data, state_id):
+        assert isinstance(data, dict), "controls tuple must be passed as a dictionary"
+        assert 'next_state' in data, "controls tuple must contain 'next_state'"
+        assert 'reward' in data, "controls tuple must contain 'reward'"
+        assert 'terminate' in data, "controls tuple must terminate"
+        assert 'truncate' in data, "controls tuple must contain truncate"
+        
+        if state_id is None:
+            print("State ID is None. Cannot store controls tuple.")
+            return 1
+        
+        query = f"INSERT INTO agent_replay (state_id, "
+        query_columns = ""
+        query_values = f"({state_id}, "
+        values = []
+        for key in data:
+            if key in ['reward', 'next_state']:
+                data[key] = data[key].tostring()
+            elif key in ['info']:
+                data[key] = pickle.dumps(data[key])
+
+            query_columns+= f"{key}, "
+            query_values += f"%s, "
+            values.append(data[key])
+        
+        query += query_columns[:-2] + ") VALUES " + query_values[:-2] + ")"
+        
+        
+        status = self.execute_and_commit(query, values=tuple(values))
+        
         return status
     
     def get_size(self):

@@ -19,8 +19,8 @@ if [ -f /docker-entrypoint-initdb.d/init.sql ]; then
     mysql -u root -p"$MYSQL_ROOT_PASSWORD"< /docker-entrypoint-initdb.d/init.sql
 fi
 
-echo "[PRINT] MySQL Root Password: $MYSQL_ROOT_PASSWORD"
-echo "[INFO] Running ML training script..."
+# echo "[PRINT] MySQL Root Password: $MYSQL_ROOT_PASSWORD"
+echo "[INFO] Running Agent..."
 python3 /app/smocs/agents/db_demo_agent.py
 
 
