@@ -17,20 +17,22 @@ CREATE TABLE IF NOT EXISTS agent_inferences (
     id INT AUTO_INCREMENT PRIMARY KEY, 
     state_source_timestamp DATETIME(6) NOT NULL, 
     state_received_timestamp DATETIME(6) NOT NULL,
-    prediction_timestamp DATETIME(6) NOT NULL, 
     state BLOB NOT NULL, 
-    prediction BLOB NOT NULL
+    prediction_timestamp DATETIME(6), 
+    prediction BLOB
 );
 
 CREATE TABLE IF NOT EXISTS agent_replay (
     id INT AUTO_INCREMENT PRIMARY KEY,
     state_id INT NOT NULL,
     action_success BOOL,
-    reward FLOAT,
+    reward BLOB NOT NULL,
     next_state_source_timestamp DATETIME(6) NOT NULL,
     next_state_received_timestamp DATETIME(6) NOT NULL,
     next_state BLOB NOT NULL,
-    done BOOL,
+    terminate BOOL NOT NULL,
+    truncate BOOL NOT NULL,
+    info BLOB,
     FOREIGN KEY (state_id) REFERENCES agent_inferences(id)
 );;
 
