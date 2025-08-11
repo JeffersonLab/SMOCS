@@ -235,6 +235,31 @@ class DBManager:
         parsed_results = self.parse_results(results)
             
         return parsed_results
+    
+    def check_sample_feasibility(self, segment_length, agent_type):
+        """
+        Checks if there are enough samples in the database to sample a batch of the specified segment length.
+
+        Args:
+            segment_length (int): The length of the segment to be sampled.
+            agent_type (str): The type of agent for which the samples are being checked.
+
+        Returns:
+            bool: True if there are enough samples, False otherwise.
+        """
+        success = True
+        number_of_records_prediction_table = self.get_size(table_name="agent_inferences")
+        if number_of_records_prediction_table < segment_length:
+            print("Number of records in prediction table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
+            success = False
+        
+        if agent_type.lower() == "controls":
+            number_of_records_replay_table = self.get_size(table_name="agent_replay")
+            if number_of_records_replay_table < segment_length:
+                print("Number of records in replay table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
+                success = False
+        
+        return success
 
     
     def sample_batch(self, batch_size, segment_length, agent_type, mode="random"):
@@ -242,6 +267,13 @@ class DBManager:
         """
 
         """
+        if agent_type.lower() not in ["controls", "diagnostics"]:
+            print(f"Invalid agent_type: {agent_type}. Valid values are 'controls' or 'diagnostics'.")
+            return None
+        
+        if not self.check_sample_feasibility(segment_length, agent_type):
+            print("Not enough samples in the database to sample a batch.")
+            return None
         
         batch = {'state_source_timestamp': [],
                               'state': []}
@@ -370,8 +402,8 @@ class DBManager:
         
         return status
     
-    def get_size(self):
-        query = f"SELECT COUNT(*) FROM {self.table_name}"
+    def get_size(self, table_name):
+        query = f"SELECT COUNT(*) FROM {table_name}"
         self.db_cursor.execute(query)
         rowcount = self.db_cursor.fetchone()
         return rowcount['COUNT(*)']
