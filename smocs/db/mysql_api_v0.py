@@ -426,7 +426,7 @@ class DBManager:
         values = []
         for key in data:
             if key in ['state', 'prediction'] and data[key] is not None:
-                data[key] = data[key].tostring()
+                data[key] = data[key].tobytes()
 
             query_columns+= f"{key}, "
             query_values += f"%s, "
@@ -478,7 +478,7 @@ class DBManager:
         assert key in ['state_source_timestamp', 'state_id'], f"Key must be one of 'state_source_timestamp' or 'state_id', got {key}"
         
         query = f"UPDATE agent_inferences set prediction = %s, prediction_timestamp = '{prediction_timestamp}' WHERE {key} = %s"
-        values = (prediction.tostring(), key_value)
+        values = (prediction.tobytes(), key_value)
         
         status = self.__execute_and_commit(query, values=values)    
             
@@ -516,7 +516,7 @@ class DBManager:
         values = []
         for key in data:
             if key in ['reward', 'next_state']:
-                data[key] = data[key].tostring()
+                data[key] = data[key].tobytes()
             elif key in ['info']:
                 data[key] = pickle.dumps(data[key])
 
