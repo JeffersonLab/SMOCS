@@ -22,7 +22,7 @@ class DemoDBAgent:
         print("Connection to database ", self.db_manager.is_connected())
         self.observation_shape = (10, 2)
         self.batch_size = 3
-        self.agent_type = "diagnostic"
+        self.agent_type = "diagnostics"
         
 
 
@@ -37,8 +37,8 @@ class DemoDBAgent:
         status = self.db_manager.record_prediction(pred, pred_timestamp, key_value, key)
         if status != 0:
             print("Failed to store inference in the database.")
-            print("prediction: ", prediction)
-            print("key: ", key)
+            print("prediction: ", pred)
+            print("key: ", key, " key value: ", key_value)
         
         return status
     
@@ -55,13 +55,13 @@ class DemoDBAgent:
         
         return status
 
-    def sample_training_batch_diagnostic(self, mode="random"):
+    def sample_training_batch_diagnostics(self, mode="random"):
         results = self.db_manager.sample_batch(segment_length=self.observation_shape[0],
                                                batch_size=self.batch_size,
                                                agent_type=self.agent_type,
                                                mode=mode)
         if results is None:
-            print("No results found for the given parameters.")
+            print("No results found for the given parameters...")
         else:
             print("*"*30)
             print("Sampled Training Batch:")
@@ -76,7 +76,7 @@ class DemoDBAgent:
                                                agent_type='controls',
                                                mode=mode)
         if results is None:
-            print("No results found for the given parameters.")
+            print("No results found for the given parameters...")
         else:
             print("*"*30)
             print("Sampled Training Batch:")
@@ -122,14 +122,16 @@ if __name__ == "__main__":
         print(f"Stored data for iteration {i+1}: {data['state_source_timestamp']}")
         time.sleep(1)  # Simulate some delay
 
-    data = agent.sample_training_batch_diagnostic(mode="random")
+    data = agent.sample_training_batch_diagnostics(mode="random")
     print("Sampled Data for Diagnostics: ", data)
-    print("keys: ", data.keys())
-    for key in data:
-        print(f"{key} Shape: {data[key].shape}")
+    if data is not None:
+        print("keys: ", data.keys())
+        for key in data:
+            print(f"{key} Shape: {data[key].shape}")
 
     data = agent.sample_training_batch_controls(mode="random")
     print("Sampled Data for Controls: ", data)
-    print("keys: ", data.keys())
-    for key in data:
-        print(f"{key} Shape: {data[key].shape}")
+    if data is not None:
+        print("keys: ", data.keys())
+        for key in data:
+            print(f"{key} Shape: {data[key].shape}")
