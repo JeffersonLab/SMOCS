@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any
 import pickle
 
-from smocs.utils import ConfigLoader
 from smocs.db.mysql_api_v0 import DBManager
 
 logging.basicConfig(level=logging.INFO)
@@ -18,24 +17,16 @@ class AgentBase(ABC):
     Manages the three main threads: data ingest, ML training, and ML inference.
     """
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, agent_name: str = "unnamed_agent"):
         """
         Initialize the agent.
         
         Args:
-            config_path: Path to configuration file
+            agent_name: Name for this agent instance
         """
         # Generate unique agent ID
         self.agent_id = str(uuid.uuid4())
-        
-        # Load configuration
-        config_path = config_path or os.getenv('CONFIG_PATH', '/app/config.yaml')
-        self.config_loader = ConfigLoader(config_path)
-        
-        if not self.config_loader.has_config('agent'):
-            raise ValueError("No agent configuration found in config file")
-        
-        self.config = self.config_loader.config.get('agent', {})
+        self.agent_name = agent_name
         
         # Setup database connection for agent registration
         self.db_manager = self._setup_db_connection()
@@ -48,7 +39,7 @@ class AgentBase(ABC):
         # Thread objects for monitoring
         self.thread_objects = {}
         
-        logging.info(f"Agent {self.agent_id} initialized")
+        logging.info(f"Agent {self.agent_id} ({self.agent_name}) initialized")
     
     def _setup_db_connection(self) -> DBManager:
         """Setup database connection for agent registration."""
@@ -92,8 +83,8 @@ class AgentBase(ABC):
         try:
             agent_data = {
                 'registered_id': self.agent_id,
-                'agent_name': self.config.get('name', 'unnamed_agent'),
-                'config': pickle.dumps(self.config),
+                'agent_name': self.agent_name,
+                'config': pickle.dumps({}),  # Empty config - to be filled by concrete implementations
                 'info': pickle.dumps({
                     'startup_time': time.time(),
                     'status': 'starting'
