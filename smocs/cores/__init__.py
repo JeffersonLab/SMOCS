@@ -8,6 +8,7 @@ from .kafka_streaming_process_base import KafkaStreamingProcessBase
 from .ml_inference_thread_base import MLInferenceThreadBase
 from .ml_training_thread_base import MLTrainingThreadBase
 from .data_ingest_thread_base import DataIngestThreadBase
+from .agent_base import AgentBase
 
 __version__ = "1.0.0"
-__all__ = ["KafkaProducerBase", "KafkaConsumerBase", "KafkaStreamingProcessBase", "MLInferenceThreadBase", "MLTrainingThreadBase", "DataIngestThreadBase"]
+__all__ = ["KafkaProducerBase", "KafkaConsumerBase", "KafkaStreamingProcessBase", "MLInferenceThreadBase", "MLTrainingThreadBase", "DataIngestThreadBase", "AgentBase"]
