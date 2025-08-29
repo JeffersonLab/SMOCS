@@ -146,29 +146,6 @@ services:
       - kafka-net
     command: ["sh", "-c", "sleep 15 && exec python -m smocs.consumers.influxdb_kafka_consumer"]
 
-  agent:
-    build:
-      context: ../
-      dockerfile: ./orchestration/containers/agent/Dockerfile
-    depends_on:
-      kafka-broker:
-        condition: service_healthy
-    environment:
-      KAFKA_BROKER_URL: kafka-broker:9092
-      MYSQL_HOST: ${MYSQL_HOST}
-      MYSQL_PORT: ${MYSQL_PORT}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      PYTHONPATH: /app
-    ports:
-      - "3307:3307"
-    volumes:
-      - mysql-data:/var/lib/mysql
-    networks:
-      - kafka-net
-    command: ["/bin/bash", "/entrypoint.sh"]
-
 volumes:
   influxdb-data:
   grafana-storage:

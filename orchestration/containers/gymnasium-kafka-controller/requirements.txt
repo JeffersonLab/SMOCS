@@ -2,6 +2,7 @@ kafka-python==2.0.2
 gymnasium==0.29.1
 numpy==1.24.3
 PyYAML==6.0.2
+mysql-connector-python==9.1.0   # Required for mysql db but should be removed due to inits requiring certain packages
 # gymnasium[classic-control]  # For CartPole, MountainCar, etc.
 # gymnasium[box2d]           # For LunarLander, CarRacing, etc.
 # gymnasium[atari]           # For Atari games
