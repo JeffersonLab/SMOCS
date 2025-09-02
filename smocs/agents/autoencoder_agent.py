@@ -185,6 +185,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 return None
             
             # Get recent sensor data from database - specify agent_type="diagnostics"
+            # TODO: Go back and check if I need the sliding window internal function call now that I am recieving data (Check the shapes to make sure it is working correctly)
             batch_data = self.db_manager.sample_batch(
                 batch_size=min(10, total_samples // self.window_size),
                 segment_length=max(self.window_size * 2, 100),
@@ -596,6 +597,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
 class AutoencoderAgent(AgentBase):
     """
     Autoencoder agent for time series anomaly detection.
+    TODO: Make configurable and generic with registation for component thread classes allowing for configuration based instantiation of an agent
     """
     
     def __init__(self, config_path: str = None):

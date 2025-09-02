@@ -53,7 +53,6 @@ class DBManager:
         """
         return self.mydb.is_connected()
         
-
     def __execute_and_commit(self, query, values=None):
         """
         Executes a SQL query and commits the changes to the database.
@@ -415,7 +414,6 @@ class DBManager:
         
         return batch
 
-    
     def record_sensor_data(self, data):
         """
         Records sensor data into the database.
@@ -560,7 +558,6 @@ class DBManager:
         rowcount = self.db_cursor.fetchone()
         return rowcount['COUNT(*)']
             
-
     def close(self):
         """
         Closes the database cursor and connection, terminating the current session.
