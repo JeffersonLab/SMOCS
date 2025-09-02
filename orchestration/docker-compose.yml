@@ -104,27 +104,6 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "smocs.control_plane.gymnasium_kafka_controller"]
 
-  grafana:
-    image: grafana/grafana:12.0.2
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-storage:/var/lib/grafana
-      - ./containers/grafana/provisioning:/etc/grafana/provisioning
-      - ./containers/grafana/dashboards:/etc/grafana/dashboards
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
-      - INFLUXDB_ORG=${INFLUXDB_ORG}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET}
-    restart: unless-stopped
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    networks:
-      - kafka-net
-
   influxdb-consumer:
     build:
       context: ../
@@ -145,6 +124,35 @@ services:
     networks:
       - kafka-net
     command: ["sh", "-c", "sleep 15 && exec python -m smocs.consumers.influxdb_kafka_consumer"]
+
+  autoencoder-agent:
+    build:
+      context: ../
+      dockerfile: ./orchestration/containers/autoencoder-agent/Dockerfile
+    profiles: ["gymnasium"]
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+      gymnasium-kafka-controller:
+        condition: service_started
+    environment:
+      KAFKA_BROKER_URL: kafka-broker:9092
+      MYSQL_HOST: localhost  # Changed from 'agent' to 'localhost'
+      MYSQL_PORT: 3306       # Changed from 3307 to 3306 (standard MySQL port)
+      MYSQL_USER: root
+      MYSQL_DATABASE: agentdb
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CONFIG_PATH: /app/config.yaml
+      PYTHONPATH: /app
+    networks:
+      - kafka-net
+    ports:
+      - "3307:3307"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    restart: unless-stopped
+    command: ["/bin/bash", "/entrypoint.sh"]
+
 
 volumes:
   influxdb-data:

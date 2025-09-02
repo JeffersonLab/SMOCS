@@ -28,18 +28,30 @@ epics:
 gymnasium:
   environment: "MountainCarContinuous-v0"
   input_topic: "gymnasium-action"
-  output_topic: "gymnasmium-output"
+  output_topic: "gymnasium-output"
   blocking_mode: false
   default_action_strategy: "random"
   step_delay: 0.1
   reset_on_start: true
-  max_episode_steps: null  # null uses environment default
+  max_episode_steps: 10000000  # null uses environment default
   render_mode: null        # "human", "rgb_array", or null
 
 kafka:
   auto_create: true
   partitions: 1
   replication_factor: 1
+
+autoencoder_agent:
+  window_size: 50
+  min_training_samples: 1000
+  encoder_dims: [32, 16]
+  learning_rate: 0.001
+  batch_size: 32
+  epochs: 50
+  kafka_topics:
+    input: "gymnasium-output"
+    output: "autoencoder-anomalies"
+    training_output: "autoencoder-training-results"
 
 project:
   name: "smocs-gym-streaming"

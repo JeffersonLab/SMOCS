@@ -2,4 +2,6 @@
 Agent implementations for SMOCS.
 """
 
-__all__ = []
+from .autoencoder_agent import AutoencoderAgent
+
+__all__ = ["AutoencoderAgent"]
