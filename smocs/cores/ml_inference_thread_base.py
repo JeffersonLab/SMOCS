@@ -41,7 +41,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
         # Load initial model
         self.load_model()
         
-        logging.info(f"ML Inference Thread initialized for agent {agent_id}")
+        logging.info(f"MLInfernceThread: ML Inference Thread initialized for agent {agent_id}")
     
     def _setup_db_connection(self) -> DBManager:
         """Setup database connection for this thread."""
@@ -96,7 +96,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
             return True, [(kafka_topic, json.dumps(output_message))]
             
         except Exception as e:
-            logging.error(f"Error processing inference message: {e}")
+            logging.error(f"MLInfernceThread: Error processing inference message: {e}")
             return False, []
     
     def _store_inference_result(self, inference_request: Any, inference_result: Any):
@@ -106,7 +106,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
             # Implementation depends on specific data structure
             pass
         except Exception as e:
-            logging.error(f"Error storing inference result: {e}")
+            logging.error(f"MLInfernceThread: Error storing inference result: {e}")
     
     @abstractmethod
     def load_model(self):

@@ -7,9 +7,12 @@
 
 import mysql.connector as mysql
 import numpy as np
+import logging
 import decimal
 import time
 import pickle
+
+logging.basicConfig(level=logging.INFO)
 
 class DBManager:
 
@@ -37,7 +40,7 @@ class DBManager:
         """
         
         self.db_name = f"SMOCS_Agent_{db_cfg_dict['database']}"
-        print("initializing DBConnector")
+        logging.debug("initializing DBConnector")
         
         self.connect(db_cfg_dict)
 
@@ -62,7 +65,7 @@ class DBManager:
             None
 
         Raises:
-            Exception: If there is an error executing the query, it will print the error message.
+            Exception: If there is an error executing the query, it will logging.debug the error message.
         """
         status = 1
         try:
@@ -74,8 +77,8 @@ class DBManager:
             self.mydb.commit()
             status = 0
         except Exception as e:
-            print("DB Error: ", e)
-            print("with query: ", query)
+            logging.debug("DB Error: ", e)
+            logging.debug("with query: ", query)
             raise e
         
         return status
@@ -91,14 +94,14 @@ class DBManager:
             list: A list of dictionaries containing the results of the query.
 
         Raises:
-            Exception: If there is an error executing the query, it will print the error message.
+            Exception: If there is an error executing the query, it will logging.debug the error message.
         """
         try:
             self.db_cursor.execute(query)
             results = self.db_cursor.fetchall()
         except Exception as e:
-            print("DB Error: ", e)
-            print("with query: ", query)
+            logging.debug("DB Error: ", e)
+            logging.debug("with query: ", query)
             raise e
         
         return results
@@ -120,7 +123,7 @@ class DBManager:
         
         for i in range(n_connection_trials):
             try:
-                print("Connecting to DB - trial ", i)
+                logging.debug("Connecting to DB - trial ", i)
                 self.mydb = mysql.connect(host=db_config["host"], 
                                 username=db_config["user"], 
                                 password=db_config["pwd"], 
@@ -130,15 +133,14 @@ class DBManager:
                 self.db_cursor = self.mydb.cursor(dictionary=True)
                 break
             except Exception as e:            
-                print(e)
+                logging.debug(e)
                 if i == n_connection_trials-1:
-                    print(f"Could not connect to DATABASE in {n_connection_trials} attempts, exiting.")
+                    logging.debug(f"Could not connect to DATABASE in {n_connection_trials} attempts, exiting.")
                     exit(1)
-                print("ERROR: CANNOT CONNECT TO DATABASE, WAITING 5 sec...")
+                logging.debug("ERROR: CANNOT CONNECT TO DATABASE, WAITING 5 sec...")
                 time.sleep(5)
 
-        print("CONNECTED TO DB: ", db_config['database'])
-
+        logging.debug("CONNECTED TO DB: ", db_config['database'])
 
     def create_tables(self):
         """
@@ -185,7 +187,6 @@ class DBManager:
         """
         self.__execute_and_commit(query)
 
-    
     def parse_results(self, results):
         """
         Parses the results from the database query, converting any decimal.Decimal or bytes types to appropriate formats.
@@ -199,7 +200,7 @@ class DBManager:
         Example:
             >>> results = [{'id': 1, 'value': decimal.Decimal('3.14'), 'data': b'\x00\x01\x02\x03'}]
             >>> parsed_results = self.parse_results(results)
-            >>> print(parsed_results)
+            >>> logging.debug(parsed_results)
             [{'id': 1, 'value': 3.14, 'data': array([0., 1., 2., 3.])}]
         """
         parsed_results = []
@@ -214,59 +215,76 @@ class DBManager:
                         try:
                             result[key] = pickle.loads(result[key])
                         except pickle.UnpicklingError:
-                            print(f"Could not unpickle data for key: {key}")
+                            logging.debug(f"Could not unpickle data for key: {key}")
                 
             parsed_results.append(result)
         return np.array(parsed_results)
 
-    def get_timestamps(self, window_size, mode="random", n=1):
+    def get_timestamps(self, window_size, mode="random", n=1, agent_type="diagnostics"):
         """
-        Retrieves a list of timestamps from the database that have at least `window_size` number of records in the `agent_inferences` table.
+        Retrieves a list of timestamps from the database that have at least `window_size` number of records.
+        
         Args:
             window_size (int): The minimum number of records required for each timestamp.
             mode (str): The mode of sampling, either "random" or "latest". Defaults to "random".
             n (int): The number of timestamps to retrieve. Defaults to 1.
+            agent_type (str): The type of agent - "controls" or "diagnostics". Defaults to "diagnostics".
+            
         Returns:
             list: A list of dictionaries containing the timestamps that meet the criteria.
-        Raises:
-            None: If the mode is not understood, it returns None.
-        Example:
-            >>> timestamps = self.get_timestamps(window_size=5, mode="random", n=3)
-            >>> print(timestamps)
-            [{'state_source_timestamp': '2023-10-01 12:00:00'}, 
-             {'state_source_timestamp': '2023-10-01 12:05:00'}, 
-             {'state_source_timestamp': '2023-10-01 12:10:00'}]
         """
-
-        query = f"""
-        SELECT ai.state_source_timestamp
-        FROM agent_inferences ai
-        WHERE EXISTS (
-            SELECT 1
-            FROM agent_replay ar
-            WHERE ar.state_id = ai.id
-        )
-        AND (
-            SELECT COUNT(*)
-            FROM agent_inferences ai2
-            WHERE ai2.state_source_timestamp >= ai.state_source_timestamp
-        ) >= {window_size}
-        ORDER BY
-        """
-        if mode.lower() == "random":
-            query += f" RAND() LIMIT {n}"
-        elif mode.lower() == "latest":
-            query += f" DESC LIMIT {n}"
-        else:
-            print("mode not understood in get_timestamps function...most likely coming from invalid mode argument to sample_batch function. Valid values are 'random' or 'latest' ")
-            return None
         
-        results = self.__execute_query(query)
+        if agent_type.lower() == "controls":
+            # Control agents require data in both agent_inferences and agent_replay
+            query = f"""
+            SELECT ai.state_source_timestamp
+            FROM agent_inferences ai
+            WHERE EXISTS (
+                SELECT 1
+                FROM agent_replay ar
+                WHERE ar.state_id = ai.id
+            )
+            AND (
+                SELECT COUNT(*)
+                FROM agent_inferences ai2
+                WHERE ai2.state_source_timestamp >= ai.state_source_timestamp
+            ) >= {window_size}
+            """
+            
+            if mode.lower() == "random":
+                query += " ORDER BY RAND()"
+            elif mode.lower() == "latest":
+                query += " ORDER BY ai.state_source_timestamp DESC"
+            else:
+                logging.debug("mode not understood in get_timestamps function...")
+                return None
+                
+        else:  # diagnostics
+            # Diagnostic agents only need data in agent_inferences
+            query = f"""
+            SELECT state_source_timestamp
+            FROM agent_inferences
+            WHERE (
+                SELECT COUNT(*)
+                FROM agent_inferences ai2
+                WHERE ai2.state_source_timestamp >= agent_inferences.state_source_timestamp
+            ) >= {window_size}
+            """
+            
+            if mode.lower() == "random":
+                query += " ORDER BY RAND()"
+            elif mode.lower() == "latest":
+                query += " ORDER BY state_source_timestamp DESC"
+            else:
+                logging.debug("mode not understood in get_timestamps function...")
+                return None
+        
+        query += f" LIMIT {n}"
+        
+        results = self._DBManager__execute_query(query)
         parsed_results = self.parse_results(results)
-
         return parsed_results
-    
-    
+      
     def sample_sequence(self, window_time_seed, agent_type, segment_length):
         """
         Samples a sequence of data from the database starting from a given timestamp.
@@ -277,10 +295,10 @@ class DBManager:
         Returns:
             list: A list of dictionaries containing the sampled data for the specified agent type.
         Raises:
-            Exception: If there is an error executing the query, it will print the error message and return None.
+            Exception: If there is an error executing the query, it will logging.debug the error message and return None.
         Example:
             >>> sequence = self.sample_sequence(window_time_seed='2023-10-01 12 :00:00', agent_type='diagnostics', segment_length=10)
-            >>> print(sequence)
+            >>> logging.debug(sequence)
             [{'state_source_timestamp': '2023-10-01 12:00:00', 'state': array([0.1, 0.2])},
              {'state_source_timestamp': '2023-10-01 12:00:01', 'state': array([0.3, 0.4])},
              ...]
@@ -295,8 +313,8 @@ class DBManager:
             self.db_cursor.execute(query)
             results = self.db_cursor.fetchall()
         except Exception as e:
-            print("DB Error: ", e)
-            print("with query: ", query)
+            logging.debug("DB Error: ", e)
+            logging.debug("with query: ", query)
             return None
             
         parsed_results = self.parse_results(results)
@@ -318,24 +336,23 @@ class DBManager:
             None: If the agent_type is not recognized, it returns False.
         Example:
             >>> success = self.check_sample_feasibility(segment_length=10, agent_type='diagnostics')
-            >>> print(success)
+            >>> logging.debug(success)
             True
         """
         success = True
         number_of_records_prediction_table = self.get_size(table_name="agent_inferences")
         if number_of_records_prediction_table < segment_length:
-            print("Number of records in prediction table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
+            logging.debug("Number of records in prediction table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
             success = False
         
         if agent_type.lower() == "controls":
             number_of_records_replay_table = self.get_size(table_name="agent_replay")
             if number_of_records_replay_table < segment_length:
-                print("Number of records in replay table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
+                logging.debug("Number of records in replay table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
                 success = False
         
         return success
-
-    
+ 
     def sample_batch(self, batch_size, segment_length, agent_type, mode="random"):
         # Select n random timestamps as starting point for sequences
         """
@@ -356,11 +373,11 @@ class DBManager:
             dict: A dictionary containing the sampled batch data, with keys such as 'state_source_timestamp', 'state', 'prediction', 'next_state', 'reward', 'terminate', and 'truncate'.
         """
         if agent_type.lower() not in ["controls", "diagnostics"]:
-            print(f"Invalid agent_type: {agent_type}. Valid values are 'controls' or 'diagnostics'.")
+            logging.debug(f"Invalid agent_type: {agent_type}. Valid values are 'controls' or 'diagnostics'.")
             return None
         
         if not self.check_sample_feasibility(segment_length, agent_type):
-            print("Not enough samples in the database to sample a batch.")
+            logging.debug("Not enough samples in the database to sample a batch.")
             return None
         
         batch = {'state_source_timestamp': [],
@@ -375,11 +392,10 @@ class DBManager:
         required_samples = batch_size
         
         while required_samples > 0:
-            
             timestamps = self.get_timestamps(window_size=segment_length,
-                                             mode=mode,
-                                             n=required_samples)
-            # print("parsed results after get timestamps: ", parsed_results)
+                                            mode=mode,
+                                            n=required_samples,
+                                            agent_type=agent_type)
             for result in timestamps:
                 window_seed = result['state_source_timestamp']
                 results = self.sample_sequence(window_time_seed=window_seed,
@@ -388,9 +404,7 @@ class DBManager:
                 
                 if results is None:
                     raise ValueError("No results found for the given window seed.")
-                
-                print("results: ", results)
-                
+                                
                 for key in batch:
                     batch[key].append([results[i][key] for i in range(len(results))])
             key = list(batch.keys())[0]
@@ -417,7 +431,7 @@ class DBManager:
         """
         assert isinstance(data, dict), "Data must be a dictionary"
         if len(data) == 0:
-            print("No data to store, exiting...")
+            logging.debug("No data to store, exiting...")
             return 0
         
         query = f"INSERT INTO agent_inferences "
@@ -451,10 +465,10 @@ class DBManager:
         results = self.__execute_query(query)
         
         if len(results) == 0:
-            print(f"No state found for source timestamp: {source_timestamp}")
+            logging.debug(f"No state found for source timestamp: {source_timestamp}")
             return None
         elif len(results) > 1:
-            print(f"Multiple states found for source timestamp: {source_timestamp}, returning the first one.")
+            logging.debug(f"Multiple states found for source timestamp: {source_timestamp}, returning the first one.")
             return [int(results[i]['id']) for i in range(len(results))]
         
         return int(results[0]['id'])
@@ -507,7 +521,7 @@ class DBManager:
         assert 'truncate' in data, "controls tuple must contain truncate"
         
         if state_id is None:
-            print("State ID is None. Cannot store controls tuple.")
+            logging.debug("State ID is None. Cannot store controls tuple.")
             return 1
         
         query = f"INSERT INTO agent_replay (state_id, "
@@ -566,11 +580,11 @@ class DBManager:
             closing connection
             db connection closed
         """
-        print("closing cursor")
+        logging.info("closing cursor")
         self.db_cursor.close()
-        print("closing connection")
+        logging.info("closing connection")
         self.mydb.close()
-        print("db connection closed")
+        logging.info("db connection closed")
 
 
 # DOCUMENTATION: notifies of database error if connection fails 

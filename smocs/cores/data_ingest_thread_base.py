@@ -35,7 +35,7 @@ class DataIngestThreadBase(KafkaConsumerBase, ABC):
         # Setup database connection
         self.db_manager = self._setup_db_connection()
         
-        logging.info(f"Data Ingest Thread initialized for agent {agent_id}")
+        logging.info(f"DataIngestThread: Data Ingest Thread initialized for agent {agent_id}")
     
     def _setup_db_connection(self) -> DBManager:
         """Setup database connection for this thread."""
@@ -66,10 +66,10 @@ class DataIngestThreadBase(KafkaConsumerBase, ABC):
         try:
             success = self.store_message(message, topic, partition, offset)
             if success:
-                logging.debug(f"Successfully processed message from {topic}:{partition}:{offset}")
+                logging.debug(f"DataIngestThread: Successfully processed message from {topic}:{partition}:{offset}")
             return success
         except Exception as e:
-            logging.error(f"Error in store_message: {e}")
+            logging.error(f"DataIngestThread: Error in store_message: {e}")
             return False
     
     @abstractmethod

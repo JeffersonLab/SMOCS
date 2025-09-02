@@ -51,7 +51,7 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
             # Get sensor readings from channels
             channels = data.get('channels', {})
             if not channels:
-                logging.warning(f"No channels found in message: {data}")
+                logging.warning(f"AEDataIngestThread: No channels found in message: {data}")
                 return False
                     
             state_keys = [k for k in channels.keys()
@@ -68,7 +68,7 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                     value = float(channels[key])
                     state_values.append(value)
                 except (ValueError, TypeError):
-                    logging.warning(f"Skipping non-numeric state value: {key}={channels[key]}")
+                    logging.warning(f"AEDataIngestThread: Skipping non-numeric state value: {key}={channels[key]}")
                     continue
 
             # Convert to numpy array for storage
@@ -84,14 +84,14 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
             status = self.db_manager.record_sensor_data(sensor_data)
             
             if status == 0:
-                logging.debug(f"Stored sensor data: {len(sensor_values)} channels at {timestamp}")
+                logging.debug(f"AEDataIngestThread: Stored sensor data: {len(sensor_values)} channels at {timestamp}")
                 return True
             else:
-                logging.error(f"Failed to store sensor data, status: {status}")
+                logging.error(f"AEDataIngestThread: Failed to store sensor data, status: {status}")
                 return False
                 
         except Exception as e:
-            logging.error(f"Error storing message: {e}")
+            logging.error(f"AEDataIngestThread: Error storing message: {e}")
             return False
 
 
@@ -122,7 +122,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
     def build_model(self):
         """Build TensorFlow autoencoder model."""
         # Will build model once we know input dimensions from data
-        logging.info("Autoencoder model will be built when input dimensions are determined")
+        logging.info("AEMLTrainingThread: Autoencoder model will be built when input dimensions are determined")
     
     def _create_autoencoder(self, input_dim: int):
         """
@@ -161,8 +161,8 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.model = autoencoder
         self.input_dim = input_dim
         
-        logging.info(f"Built autoencoder: input_dim={input_dim}, encoder_dims={self.encoder_dims}")
-        logging.info(f"Model summary: {autoencoder.summary()}")
+        logging.info(f"AEMLTrainingThread: Built autoencoder: input_dim={input_dim}, encoder_dims={self.encoder_dims}")
+        logging.info(f"AEMLTrainingThread: Model summary: {autoencoder.summary()}")
     
     def get_training_data(self) -> Optional[np.ndarray]:
         """
@@ -176,41 +176,40 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             total_samples = self.db_manager.get_size("agent_inferences")
             
             if total_samples < self.min_training_samples:
-                logging.debug(f"Not enough samples for training: {total_samples} < {self.min_training_samples}")
+                logging.debug(f"AEMLTrainingThread: Not enough samples for training: {total_samples} < {self.min_training_samples}")
                 return None
             
             # Check if we have new data since last training
             if total_samples <= self.last_training_count:
-                logging.debug("No new data since last training")
+                logging.debug("AEMLTrainingThread: No new data since last training")
                 return None
             
-            # Get recent sensor data from database
-            # Use sample_batch with segment_length for time series data
+            # Get recent sensor data from database - specify agent_type="diagnostics"
             batch_data = self.db_manager.sample_batch(
-                batch_size=min(10, total_samples // self.window_size),  # Multiple sequences
-                segment_length=max(self.window_size * 2, 100),  # Get longer sequences
-                agent_type="diagnostics",  # Use diagnostics type for raw data
-                mode="latest"  # Get most recent data
+                batch_size=min(10, total_samples // self.window_size),
+                segment_length=max(self.window_size * 2, 100),
+                agent_type="diagnostics",  # This is now properly supported
+                mode="latest"
             )
             
             if batch_data is None or len(batch_data['state']) == 0:
-                logging.warning("No training data retrieved from database")
+                logging.warning("AEMLTrainingThread: No training data retrieved from database")
                 return None
             
             # Convert to windowed format
             windowed_data = self._create_sliding_windows(batch_data['state'])
             
             if windowed_data is None or len(windowed_data) == 0:
-                logging.warning("No valid windows created from training data")
+                logging.warning("AEMLTrainingThread: No valid windows created from training data")
                 return None
             
             self.last_training_count = total_samples
             
-            logging.info(f"Prepared {len(windowed_data)} training windows from {total_samples} total samples")
+            logging.info(f"AEMLTrainingThread: Prepared {len(windowed_data)} training windows from {total_samples} total samples")
             return windowed_data
             
         except Exception as e:
-            logging.error(f"Error getting training data: {e}")
+            logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
             return None
     
     def _create_sliding_windows(self, time_series_data: List[np.ndarray]) -> Optional[np.ndarray]:
@@ -257,7 +256,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             return windowed_array
             
         except Exception as e:
-            logging.error(f"Error creating sliding windows: {e}")
+            logging.error(f"AEMLTrainingThread: Error creating sliding windows: {e}")
             return None
     
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
@@ -297,12 +296,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 'training_samples': len(training_data)
             }
             
-            logging.info(f"Training completed: loss={final_loss:.4f}, val_loss={final_val_loss:.4f}")
+            logging.info(f"AEMLTrainingThread: Training completed: loss={final_loss:.4f}, val_loss={final_val_loss:.4f}")
             
             return metrics
             
         except Exception as e:
-            logging.error(f"Error training model: {e}")
+            logging.error(f"AEMLTrainingThread: Error training model: {e}")
             return {'error': str(e)}
     
     def eval_model(self) -> Dict[str, Any]:
@@ -336,12 +335,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 'eval_samples': len(eval_subset)
             }
             
-            logging.info(f"Model evaluation: mean_error={eval_metrics['mean_reconstruction_error']:.4f}")
+            logging.info(f"AEMLTrainingThread: Model evaluation: mean_error={eval_metrics['mean_reconstruction_error']:.4f}")
             
             return eval_metrics
             
         except Exception as e:
-            logging.error(f"Error evaluating model: {e}")
+            logging.error(f"AEMLTrainingThread: Error evaluating model: {e}")
             return {'error': str(e)}
     
     def save_model(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
@@ -354,7 +353,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         """
         try:
             if self.model is None:
-                logging.error("No model to save")
+                logging.error("AEMLTrainingThread: No model to save")
                 return
             
             # Serialize model
@@ -389,12 +388,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             status = self.db_manager._DBManager__execute_and_commit(query, values)
             
             if status == 0:
-                logging.info("Model saved successfully to database")
+                logging.info("AEMLTrainingThread: Model saved successfully to database")
             else:
-                logging.error(f"Failed to save model, status: {status}")
+                logging.error(f"AEMLTrainingThread: Failed to save model, status: {status}")
                 
         except Exception as e:
-            logging.error(f"Error saving model: {e}")
+            logging.error(f"AEMLTrainingThread: Error saving model: {e}")
 
 
 class AutoencoderMLInferenceThread(MLInferenceThreadBase):
@@ -421,7 +420,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             results = self.db_manager.parse_results(results)
             
             if len(results) == 0:
-                logging.warning("No saved model found in database")
+                logging.warning("AEMLInferenceThread: No saved model found in database")
                 return
             
             # Load model data
@@ -455,10 +454,10 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             eval_metrics = model_data.get('eval_metrics', {})
             self.anomaly_threshold = eval_metrics.get('anomaly_threshold_95', 0.1)
             
-            logging.info(f"Loaded autoencoder model: input_dim={self.input_dim}, threshold={self.anomaly_threshold}")
+            logging.info(f"AEMLInferenceThread: Loaded autoencoder model: input_dim={self.input_dim}, threshold={self.anomaly_threshold}")
             
         except Exception as e:
-            logging.error(f"Error loading model: {e}")
+            logging.error(f"AEMLInferenceThread: Error loading model: {e}")
     
     def parse_inference_request(self, message, topic, partition, offset) -> Optional[Dict[str, Any]]:
         """
@@ -498,7 +497,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                     value = float(channels[key])
                     state_values.append(value)
                 except (ValueError, TypeError):
-                    logging.warning(f"Skipping non-numeric state value: {key}={channels[key]}")
+                    logging.warning(f"AEMLInferenceThread: Skipping non-numeric state value: {key}={channels[key]}")
                     continue
 
             # Convert to numpy array for storage
@@ -511,7 +510,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             }
             
         except Exception as e:
-            logging.error(f"Error parsing inference request: {e}")
+            logging.error(f"AEMLInferenceThread: Error parsing inference request: {e}")
             return None
     
     def perform_inference(self, inference_request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -526,7 +525,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         """
         try:
             if self.model is None:
-                logging.warning("No model loaded for inference")
+                logging.warning("AEMLInferenceThread: No model loaded for inference")
                 return None
             
             sensor_values = inference_request['sensor_values']
@@ -585,13 +584,13 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             }
             
             if is_anomaly:
-                logging.warning(f"Anomaly detected: error_score={error_score:.4f} > threshold={self.anomaly_threshold:.4f}")
+                logging.warning(f"AEMLInferenceThread: Anomaly detected: error_score={error_score:.4f} > threshold={self.anomaly_threshold:.4f}")
             
             return result
             
         except Exception as e:
-            logging.error(f"Error performing inference: {e}")
-            return {'error': str(e), 'status': 'error'}
+            logging.error(f"AEMLInferenceThread: Error performing inference: {e}")
+            return {'AEMLInferenceThread: error': str(e), 'status': 'error'}
 
 
 class AutoencoderAgent(AgentBase):
@@ -624,7 +623,7 @@ class AutoencoderAgent(AgentBase):
         
         # Ensure kafka_topics are included in the config passed to threads
         if 'kafka_topics' not in autoencoder_config:
-            logging.warning("No kafka_topics found in config, using defaults")
+            logging.warning("AEAgent: No kafka_topics found in config, using defaults")
             autoencoder_config['kafka_topics'] = {
                 'input': 'gymnasium-output',
                 'output': 'autoencoder-anomalies',
@@ -635,7 +634,7 @@ class AutoencoderAgent(AgentBase):
         self.agent_config = autoencoder_config.copy()
         self.agent_config['agent_id'] = self.agent_id
         
-        logging.info(f"AutoencoderAgent initialized with config: {self.agent_config}")
+        logging.info(f"AEAgent: AutoencoderAgent initialized with config: {self.agent_config}")
     
     def create_data_ingest_component(self):
         """Create data ingestion thread component."""

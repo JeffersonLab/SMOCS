@@ -38,7 +38,7 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
         # Build initial model
         self.build_model()
         
-        logging.info(f"ML Training Thread initialized for agent {agent_id}")
+        logging.info(f"MLTrainingThread: ML Training Thread initialized for agent {agent_id}")
     
     def _setup_db_connection(self) -> DBManager:
         """Setup database connection for this thread."""
@@ -55,18 +55,18 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
     def start(self):
         """Start the training thread and begin the training loop."""
         try:
-            logging.info("Starting ML Training Thread...")
+            logging.info("MLTrainingThread: Starting ML Training Thread...")
             self.setup_kafka_producer()
             self.running = True
             self.training_loop()
         except Exception as e:
-            logging.error(f"Error in ML Training Thread: {e}")
+            logging.error(f"MLTrainingThread: Error in ML Training Thread: {e}")
             self.cleanup()
             raise
     
     def stop(self):
         """Stop the training loop."""
-        logging.info("Stopping ML Training Thread...")
+        logging.info("MLTrainingThread: Stopping ML Training Thread...")
         self.running = False
         self.cleanup()
     
@@ -93,7 +93,7 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
                     self._send_training_results(model_metrics, eval_results)
                 
             except Exception as e:
-                logging.error(f"Error in training loop: {e}")
+                logging.error(f"MLTrainingThread: Error in training loop: {e}")
                 time.sleep(1)
     
     def _send_training_results(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
@@ -109,7 +109,7 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
             kafka_topic = self.sanitize_topic_name(output_topic)
             self.send_to_kafka(kafka_topic, json.dumps(message))
         except Exception as e:
-            logging.error(f"Error sending training results to Kafka: {e}")
+            logging.error(f"MLTrainingThread: Error sending training results to Kafka: {e}")
     
     @abstractmethod
     def build_model(self):
