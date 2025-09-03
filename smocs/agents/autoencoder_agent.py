@@ -72,7 +72,13 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                     continue
 
             # Convert to numpy array for storage
+            # logging.info(f"Raw channels data: {channels}")
+            # logging.info(f"State keys found: {state_keys}")
+            # logging.info(f"Raw state values: {state_values}")
+            
             sensor_values = np.array(state_values, dtype=np.float32)
+            # logging.info(f"Sensor values after np.array: {sensor_values}")
+            # logging.info(f"Sensor values dtype: {sensor_values.dtype}")
             
             # Store in database using existing schema
             sensor_data = {
@@ -80,6 +86,9 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                 'state_received_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
                 'state': sensor_values
             }
+
+            # logging.info(f"Original sensor values before storage: {sensor_values}")
+            logging.info(f"Sensor values range: [{np.min(sensor_values)}, {np.max(sensor_values)}]")
             
             status = self.db_manager.record_sensor_data(sensor_data)
             
@@ -104,7 +113,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
     def __init__(self, agent_id: str, config: Dict[str, Any]):
         # Configuration parameters
         self.window_size = config.get('window_size', 50)  # 50 timesteps per window
-        self.min_training_samples = config.get('min_training_samples', 1000)
+        self.min_training_samples = config.get('min_training_samples', 10000)
         
         # Model architecture config
         self.encoder_dims = config.get('encoder_dims', [32, 16])  # Hidden layer sizes
@@ -185,79 +194,45 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 return None
             
             # Get recent sensor data from database - specify agent_type="diagnostics"
-            # TODO: Go back and check if I need the sliding window internal function call now that I am recieving data (Check the shapes to make sure it is working correctly)
             batch_data = self.db_manager.sample_batch(
-                batch_size=min(10, total_samples // self.window_size),
-                segment_length=max(self.window_size * 2, 100),
-                agent_type="diagnostics",  # This is now properly supported
+                batch_size=self.batch_size*100, # Change this
+                segment_length=self.window_size,  # Use exact window size, not 2x
+                agent_type="diagnostics",
                 mode="latest"
             )
+
+            logging.info(f"sample_batch returned {len(batch_data['state'])} sequences")
             
             if batch_data is None or len(batch_data['state']) == 0:
-                logging.warning("AEMLTrainingThread: No training data retrieved from database")
                 return None
             
-            # Convert to windowed format
-            windowed_data = self._create_sliding_windows(batch_data['state'])
-            
-            if windowed_data is None or len(windowed_data) == 0:
-                logging.warning("AEMLTrainingThread: No valid windows created from training data")
-                return None
-            
-            self.last_training_count = total_samples
-            
-            logging.info(f"AEMLTrainingThread: Prepared {len(windowed_data)} training windows from {total_samples} total samples")
-            return windowed_data
-            
-        except Exception as e:
-            logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
-            return None
-    
-    def _create_sliding_windows(self, time_series_data: List[np.ndarray]) -> Optional[np.ndarray]:
-        """
-        Create sliding windows from time series data.
-        
-        Args:
-            time_series_data: List of sensor reading arrays from database
-            
-        Returns:
-            Array of windowed data for training
-        """
-        try:
             windows = []
-            
-            for sequence in time_series_data:
-                # sequence is a list of sensor readings over time
-                if len(sequence) < self.window_size:
-                    continue
-                
-                # Convert to numpy array if needed
-                if isinstance(sequence[0], np.ndarray):
-                    # Each element is already a sensor reading array
-                    sensor_data = np.array([reading for reading in sequence])
-                else:
-                    # Convert to proper format
-                    sensor_data = np.array(sequence)
-                
-                # Create sliding windows
-                for i in range(len(sensor_data) - self.window_size + 1):
-                    window = sensor_data[i:i + self.window_size]
-                    # Flatten window to vector for dense autoencoder
-                    flattened_window = window.flatten()
-                    windows.append(flattened_window)
+            for sequence in batch_data['state']:
+                # Each sequence is already the right length (window_size)
+                if len(sequence) == self.window_size:
+                    # Convert sequence to numpy array and flatten
+                    window = np.array([state for state in sequence]).flatten()
+                    windows.append(window)
             
             if not windows:
                 return None
             
             windowed_array = np.array(windows)
+
+            logging.info(f"Training data shape: {windowed_array.shape}")
+            logging.info(f"Training data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
+            logging.info(f"Training data mean: {np.mean(windowed_array):.6f}")
+            logging.info(f"Training data std: {np.std(windowed_array):.6f}")
+            logging.info(f"Any NaN values: {np.isnan(windowed_array).any()}")
+            logging.info(f"Any infinite values: {np.isinf(windowed_array).any()}")
             
-            # Normalize data to [0, 1] range
-            windowed_array = (windowed_array - windowed_array.min()) / (windowed_array.max() - windowed_array.min() + 1e-8)
+            self.last_training_count = total_samples
             
+            logging.info(f"AEMLTrainingThread: Prepared {len(windowed_array)} training windows from {total_samples} total samples")
             return windowed_array
             
         except Exception as e:
-            logging.error(f"AEMLTrainingThread: Error creating sliding windows: {e}")
+            logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
             return None
     
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
@@ -271,6 +246,15 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             Training metrics
         """
         try:
+            # Add normalization
+            self.data_mean = np.mean(training_data, axis=0)
+            self.data_std = np.std(training_data, axis=0)
+            
+            # Avoid division by zero
+            self.data_std[self.data_std == 0] = 1.0
+            
+            normalized_data = (training_data - self.data_mean) / self.data_std
+
             # Build model if not exists
             if self.model is None:
                 input_dim = training_data.shape[1]
@@ -278,8 +262,8 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             
             # Train autoencoder (input = output for reconstruction)
             history = self.model.fit(
-                training_data,
-                training_data,  # Autoencoder learns to reconstruct input
+                normalized_data,
+                normalized_data,  # Autoencoder learns to reconstruct input
                 batch_size=self.batch_size,
                 epochs=self.epochs,
                 validation_split=0.2,
@@ -611,7 +595,7 @@ class AutoencoderAgent(AgentBase):
             # Default configuration
             autoencoder_config = {
                 'window_size': 50,
-                'min_training_samples': 1000,
+                'min_training_samples': 10000,
                 'encoder_dims': [32, 16],
                 'learning_rate': 0.001,
                 'batch_size': 32,

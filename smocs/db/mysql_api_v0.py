@@ -209,7 +209,7 @@ class DBManager:
                     result[key] = float(result[key])
                 if type(result[key]) is bytes:
                     try:
-                        result[key] = np.frombuffer(result[key], dtype=np.float64)
+                        result[key] = np.frombuffer(result[key], dtype=np.float32)
                     except ValueError:
                         try:
                             result[key] = pickle.loads(result[key])
