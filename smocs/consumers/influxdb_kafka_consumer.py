@@ -154,10 +154,28 @@ class InfluxDBConsumer(KafkaConsumerBase):
         try:
             data = message['channels']
             
-            point = Point(topic) \
+            point = Point(topic)
             
+            # Only add numeric values as fields, skip non-numeric values
             for key, value in data.items():
-                point.field(key, value)
+                # Check if value is numeric (int, float) or can be converted to numeric
+                if isinstance(value, (int, float)):
+                    point.field(key, float(value))
+                elif isinstance(value, bool):
+                    # Convert boolean to numeric (0 or 1) for InfluxDB compatibility
+                    point.field(key, float(value))
+                elif isinstance(value, str):
+                    # Try to convert string to float, skip if not possible
+                    try:
+                        numeric_value = float(value)
+                        point.field(key, numeric_value)
+                    except (ValueError, TypeError):
+                        logging.debug(f"Skipping non-numeric string field: {key}={value}")
+                        continue
+                else:
+                    # Skip non-numeric types (lists, dicts, etc.)
+                    logging.debug(f"Skipping non-numeric field: {key}={value} (type: {type(value)})")
+                    continue
         
             # Optionally use the original timestamp
             # point.time(data['timeStamp'])

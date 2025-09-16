@@ -15,7 +15,7 @@ from tensorflow.keras import layers
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
 from smocs.utils import ConfigLoader
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class AutoencoderDataIngestThread(DataIngestThreadBase):
@@ -671,7 +671,7 @@ def main():
     
     # Set up logging
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     

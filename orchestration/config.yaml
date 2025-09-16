@@ -42,11 +42,11 @@ kafka:
   replication_factor: 1
 
 autoencoder_agent:
-  window_size: 50
-  min_training_samples: 10000
+  window_size: 3
+  min_training_samples: 500
   encoder_dims: [32, 16]
   learning_rate: 0.001
-  batch_size: 32
+  batch_size: 4
   epochs: 50
   kafka_topics:
     input: "gymnasium-output"

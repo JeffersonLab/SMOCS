@@ -286,11 +286,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                     info_fields = flatten_array_with_shape(value, f"info_{key}")
                     channels.update(info_fields)
         
-        # Create the final message in the expected format
+        # Create the final message in standard format
         step_data = {
             "channels": channels,
-            "timestamp": time.time(),
-            "source_topic": self.output_topic
+            "timestamp": time.time()
         }
         
         return step_data
