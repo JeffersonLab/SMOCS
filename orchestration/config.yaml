@@ -26,7 +26,7 @@ epics:
       - IPM9A02.PHAS
 
 gymnasium:
-  environment: "MountainCarContinuous-v0"
+  environment: "HalfCheetah-v4"
   input_topic: "gymnasium-action"
   output_topic: "gymnasium-output"
   blocking_mode: false

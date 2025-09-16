@@ -197,14 +197,61 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             for sequence in batch_data['state']:
                 # Each sequence is already the right length (window_size)
                 if len(sequence) == self.window_size:
-                    # Convert sequence to numpy array and flatten
-                    window = np.array([state for state in sequence]).flatten()
-                    windows.append(window)
+                    try:
+                        # Convert each state in sequence to numpy array first to ensure consistent shape
+                        processed_sequence = []
+                        for state in sequence:
+                            if isinstance(state, np.ndarray):
+                                processed_sequence.append(state.flatten())
+                            else:
+                                # Convert to numpy array if it's not already
+                                state_array = np.array(state, dtype=np.float32)
+                                processed_sequence.append(state_array.flatten())
+                        
+                        # Ensure all states in sequence have the same length
+                        if len(processed_sequence) > 0:
+                            expected_length = len(processed_sequence[0])
+                            valid_sequence = True
+                            for i, state in enumerate(processed_sequence):
+                                if len(state) != expected_length:
+                                    logging.warning(f"AEMLTrainingThread: Inconsistent state length at position {i}: expected {expected_length}, got {len(state)}")
+                                    valid_sequence = False
+                                    break
+                            
+                            if valid_sequence:
+                                # Flatten the entire window (sequence of states)
+                                window = np.concatenate(processed_sequence)
+                                windows.append(window)
+                            else:
+                                logging.warning(f"AEMLTrainingThread: Skipping sequence with inconsistent state shapes")
+                        
+                    except Exception as seq_error:
+                        logging.warning(f"AEMLTrainingThread: Error processing sequence: {seq_error}")
+                        continue
+                else:
+                    logging.debug(f"AEMLTrainingThread: Skipping sequence with length {len(sequence)}, expected {self.window_size}")
             
             if not windows:
+                logging.error("AEMLTrainingThread: No valid windows found after processing")
                 return None
             
-            windowed_array = np.array(windows)
+            # Ensure all windows have the same length before creating array
+            if len(windows) > 0:
+                expected_window_length = len(windows[0])
+                filtered_windows = []
+                for i, window in enumerate(windows):
+                    if len(window) == expected_window_length:
+                        filtered_windows.append(window)
+                    else:
+                        logging.warning(f"AEMLTrainingThread: Skipping window {i} with length {len(window)}, expected {expected_window_length}")
+                
+                windows = filtered_windows
+            
+            if not windows:
+                logging.error("AEMLTrainingThread: No windows with consistent length found")
+                return None
+            
+            windowed_array = np.array(windows, dtype=np.float32)
             logging.info(f"Training data shape: {windowed_array.shape}")
             logging.info(f"Training data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
             logging.info(f"Training data mean: {np.mean(windowed_array):.6f}")
@@ -219,6 +266,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
+            logging.error(f"Exception details: {type(e).__name__}: {str(e)}")
             return None
     
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
@@ -293,9 +341,17 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             # Use subset for evaluation
             eval_subset = eval_data[:min(100, len(eval_data))]
             
+            # Normalize evaluation data using training statistics
+            if hasattr(self, 'data_mean') and hasattr(self, 'data_std'):
+                normalized_eval = (eval_subset - self.data_mean) / self.data_std
+            else:
+                # Fallback normalization if training stats not available
+                normalized_eval = eval_subset
+                logging.warning("AEMLTrainingThread: No training normalization stats available for evaluation")
+            
             # Evaluate reconstruction error
-            reconstructions = self.model.predict(eval_subset, verbose=0)
-            mse_errors = np.mean((eval_subset - reconstructions) ** 2, axis=1)
+            reconstructions = self.model.predict(normalized_eval, verbose=0)
+            mse_errors = np.mean((normalized_eval - reconstructions) ** 2, axis=1)
             
             eval_metrics = {
                 'mean_reconstruction_error': float(np.mean(mse_errors)),
@@ -311,6 +367,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error evaluating model: {e}")
+            logging.error(f"Exception details: {type(e).__name__}: {str(e)}")
             return {'error': str(e)}
     
     def save_model(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
@@ -541,13 +598,50 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                     'buffer_size': len(self.recent_data)
                 }
             
-            # Create inference window
-            window = np.array(self.recent_data[-self.window_size:])
-            flattened_window = window.flatten().reshape(1, -1)
+            # Create inference window with consistent shape handling
+            try:
+                window_data = []
+                for state in self.recent_data[-self.window_size:]:
+                    if isinstance(state, np.ndarray):
+                        window_data.append(state.flatten())
+                    else:
+                        state_array = np.array(state, dtype=np.float32)
+                        window_data.append(state_array.flatten())
+                
+                # Ensure all states have the same length
+                if len(window_data) > 0:
+                    expected_length = len(window_data[0])
+                    for i, state in enumerate(window_data):
+                        if len(state) != expected_length:
+                            logging.error(f"AEMLInferenceThread: Inconsistent state length at position {i}: expected {expected_length}, got {len(state)}")
+                            return {
+                                'error': f'Inconsistent state shapes in window',
+                                'status': 'error'
+                            }
+                
+                # Flatten the entire window
+                flattened_window = np.concatenate(window_data).reshape(1, -1)
+                
+            except Exception as window_error:
+                logging.error(f"AEMLInferenceThread: Error creating inference window: {window_error}")
+                return {
+                    'error': f'Window creation failed: {str(window_error)}',
+                    'status': 'error'
+                }
             
             # Normalize using training statistics if available
             if self.data_mean is not None and self.data_std is not None:
-                normalized_window = (flattened_window - self.data_mean) / self.data_std
+                try:
+                    if flattened_window.shape[1] != len(self.data_mean):
+                        logging.error(f"AEMLInferenceThread: Window size mismatch - expected {len(self.data_mean)}, got {flattened_window.shape[1]}")
+                        return {
+                            'error': 'Window size mismatch with trained model',
+                            'status': 'error'
+                        }
+                    normalized_window = (flattened_window - self.data_mean) / self.data_std
+                except Exception as norm_error:
+                    logging.error(f"AEMLInferenceThread: Normalization error: {norm_error}")
+                    normalized_window = flattened_window
             else:
                 # Fallback to simple normalization
                 window_min, window_max = flattened_window.min(), flattened_window.max()
@@ -589,6 +683,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
         except Exception as e:
             logging.error(f"AEMLInferenceThread: Error performing inference: {e}")
+            logging.error(f"Exception details: {type(e).__name__}: {str(e)}")
             return {'error': str(e), 'status': 'error'}
 
     def parse_inference_request(self, message, topic, partition, offset) -> Optional[Dict[str, Any]]:
