@@ -2,8 +2,8 @@ from abc import ABC, abstractmethod
 import logging
 import time
 from typing import List, Tuple
-
 from smocs.cores import KafkaConsumerBase, KafkaProducerBase
+
 
 class KafkaStreamingProcessBase(KafkaConsumerBase):
     """
@@ -15,7 +15,8 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
     
     The stream processor maintains the same single-threaded architecture
     as the consumer but adds the ability to produce messages based on
-    processing results.
+    processing results. Both input and output messages are validated
+    according to the required format.
     
     Uses composition with a KafkaProducerBase instance to provide
     producer functionality without code duplication.
@@ -30,13 +31,13 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
             group_id (str): Consumer group ID
             topics_or_pattern (str or list): Either a regex pattern string or list of topic names
         """
-        # Initialize consumer base
+        # Initialize consumer base (which includes validation methods)
         super().__init__(kafka_broker_url, group_id, topics_or_pattern)
         
-        # Direct composition with KafkaProducerBase - no internal class needed!
+        # Direct composition with KafkaProducerBase (which also includes validation methods)
         self.producer = KafkaProducerBase(kafka_broker_url)
         
-        logging.info("Kafka stream processor initialized with direct KafkaProducerBase composition")
+        logging.info("Kafka stream processor initialized with validation-enabled consumer and producer")
     
     def start(self):
         """
@@ -74,14 +75,14 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
     
     def consume_messages(self):
         """
-        Main consumption loop that polls for messages, processes them,
-        and sends results back to Kafka.
+        Main consumption loop that polls for messages, validates them, processes them,
+        validates outputs, and sends results back to Kafka.
         
         This extends the consumer's consume_messages to handle the
         new return format from process_message and use the composed
-        KafkaProducerBase for sending messages.
+        KafkaProducerBase for sending messages with validation.
         """
-        logging.info("Starting stream processing loop...")
+        logging.info("Starting stream processing loop with validation...")
         
         while self.running:
             try:
@@ -95,6 +96,21 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
                 for topic_partition, messages in message_batch.items():
                     for message in messages:
                         try:
+                            # Validate input topic format
+                            try:
+                                self.validate_topic_format(message.topic)
+                            except ValueError as e:
+                                logging.error(f"Invalid input topic format from {message.topic}:{message.partition}:{message.offset}: {e}")
+                                continue
+                            
+                            # Validate input message format
+                            try:
+                                self.validate_message_format(message.value)
+                            except ValueError as e:
+                                logging.error(f"Invalid input message format from {message.topic}:{message.partition}:{message.offset}: {e}")
+                                logging.debug(f"Invalid message content: {message.value}")
+                                continue
+                            
                             # Call subclass process_message with tuple return format
                             success, outputs = self.process_message(
                                 message=message.value,
@@ -107,23 +123,27 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
                                 logging.warning(f"Message processing failed for topic {message.topic}, offset {message.offset}")
                                 continue
                             
-                            # Send each output message to Kafka using composed producer
+                            # Send each output message to Kafka with validation
                             if outputs:
                                 for output in outputs:
                                     try:
                                         # Unpack tuple: (topic, message) or (topic, message, key)  
                                         if len(output) == 2:
-                                            topic, message = output
+                                            topic, output_message = output
                                             key = None
                                         elif len(output) == 3:
-                                            topic, message, key = output
+                                            topic, output_message, key = output
                                         else:
                                             raise ValueError(f"Invalid output tuple length: {len(output)}. Expected 2 or 3 elements.")
                                         
-                                        # Use composed KafkaProducerBase to send message
-                                        record_metadata = self.producer.send_to_kafka(topic, message, key)
-                                        logging.info(f"Sent output to topic '{topic}' - partition {record_metadata.partition}, offset {record_metadata.offset}")
+                                        # Use composed KafkaProducerBase to send message (includes validation)
+                                        record_metadata = self.producer.send_to_kafka(topic, output_message, key)
+                                        logging.debug(f"Sent validated output to topic '{topic}' - partition {record_metadata.partition}, offset {record_metadata.offset}")
                                         
+                                    except ValueError as e:
+                                        # Validation errors from producer
+                                        logging.error(f"Output validation failed for topic '{topic if 'topic' in locals() else 'unknown'}': {e}")
+                                        logging.debug(f"Invalid output content: {output}")
                                     except Exception as e:
                                         logging.error(f"Failed to send output tuple {output}: {e}")
                             
@@ -144,8 +164,8 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
         stream processing logic.
         
         Args:
-            message (str): The message value (already deserialized)
-            topic (str): The topic name
+            message (str): The message value (already deserialized and validated)
+            topic (str): The topic name (already validated)
             partition (int): The partition number
             offset (int): The message offset
             
@@ -156,6 +176,8 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
                   Each tuple can be:
                   - (topic, message) - topic and message only
                   - (topic, message, key) - topic, message, and optional key
+                  
+                  Note: All output topics and messages will be validated before sending.
         """
         pass
     

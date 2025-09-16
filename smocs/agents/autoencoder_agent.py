@@ -7,7 +7,6 @@ import numpy as np
 import pickle
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
-
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
@@ -16,7 +15,6 @@ from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, M
 from smocs.utils import ConfigLoader
 
 logging.basicConfig(level=logging.DEBUG)
-
 
 class AutoencoderDataIngestThread(DataIngestThreadBase):
     """
@@ -63,7 +61,6 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                         and isinstance(channels[k], (int, float))]
             
             state_keys.sort()
-
             state_values = []
             for key in state_keys:
                 try:
@@ -94,7 +91,6 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
         except Exception as e:
             logging.error(f"AEDataIngestThread: Error storing message: {e}")
             return False
-
 
 class AutoencoderMLTrainingThread(MLTrainingThreadBase):
     """
@@ -192,7 +188,6 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 agent_type="diagnostics",
                 mode="latest"
             )
-
             logging.info(f"sample_batch returned {len(batch_data['state'])} sequences")
             
             if batch_data is None or len(batch_data['state']) == 0:
@@ -210,7 +205,6 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 return None
             
             windowed_array = np.array(windows)
-
             logging.info(f"Training data shape: {windowed_array.shape}")
             logging.info(f"Training data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
             logging.info(f"Training data mean: {np.mean(windowed_array):.6f}")
@@ -246,7 +240,6 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             self.data_std[self.data_std == 0] = 1.0
             
             normalized_data = (training_data - self.data_mean) / self.data_std
-
             # Build model if not exists
             if self.model is None:
                 input_dim = training_data.shape[1]
@@ -390,7 +383,52 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 if 'tmp_file' in locals() and os.path.exists(tmp_file):
                     os.remove(tmp_file)
             logging.error(f"AEMLTrainingThread: Error saving model: {e}")
-
+    
+    def _send_training_results(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
+        """
+        Send training results to Kafka in validated format.
+        
+        Args:
+            model_metrics: Training metrics
+            eval_results: Evaluation results
+        """
+        try:
+            output_topic = self.config.get('kafka_topics', {}).get('training_output', 'autoencoder-training-results')
+            
+            # Create properly formatted message with timestamp and channels
+            channels = {
+                'agent_id': self.agent_id,
+                'model_version': eval_results.get('version', 1),
+                'training_loss': model_metrics.get('loss', 0.0),
+                'validation_loss': model_metrics.get('val_loss', 0.0),
+                'epochs_trained': model_metrics.get('epochs_trained', 0),
+                'training_samples': model_metrics.get('training_samples', 0),
+                'mean_reconstruction_error': eval_results.get('mean_reconstruction_error', 0.0),
+                'std_reconstruction_error': eval_results.get('std_reconstruction_error', 0.0),
+                'anomaly_threshold_95': eval_results.get('anomaly_threshold_95', 0.0),
+                'eval_samples': eval_results.get('eval_samples', 0),
+                'input_dim': self.input_dim or 0,
+                'window_size': self.window_size
+            }
+            
+            # Add error information if present
+            if 'error' in model_metrics:
+                channels['training_error'] = str(model_metrics['error'])
+            if 'error' in eval_results:
+                channels['eval_error'] = str(eval_results['error'])
+            
+            message = {
+                'timestamp': time.time(),
+                'channels': channels
+            }
+            
+            kafka_topic = self.sanitize_topic_name(output_topic)
+            self.send_to_kafka(kafka_topic, json.dumps(message))
+            
+            logging.info(f"AEMLTrainingThread: Sent training results to topic '{kafka_topic}'")
+            
+        except Exception as e:
+            logging.error(f"AEMLTrainingThread: Error sending training results to Kafka: {e}")
 
 class AutoencoderMLInferenceThread(MLInferenceThreadBase):
     """
@@ -584,7 +622,6 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                         and isinstance(channels[k], (int, float))]
             
             state_keys.sort()
-
             state_values = []
             for key in state_keys:
                 try:
@@ -607,11 +644,84 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             logging.error(f"AEMLInferenceThread: Error parsing inference request: {e}")
             return None
 
+    def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
+        """
+        Process incoming message and return inference results in validated format.
+        
+        Args:
+            message: The message value
+            topic: The topic name
+            partition: The partition number
+            offset: The message offset
+            
+        Returns:
+            Tuple[bool, List[Tuple]]: Success status and list of outputs to send
+        """
+        try:
+            # Parse inference request
+            inference_request = self.parse_inference_request(message, topic, partition, offset)
+            
+            if inference_request is None:
+                return False, []
+            
+            # Perform inference
+            inference_result = self.perform_inference(inference_request)
+            
+            if inference_result is None:
+                return False, []
+            
+            # Store inference result to database
+            self._store_inference_result(inference_request, inference_result)
+            
+            # Format result for Kafka in validated format
+            channels = {
+                'agent_id': self.agent_id,
+                'model_version': inference_result.get('model_version', 0),
+                'error_score': inference_result.get('error_score', 0.0),
+                'is_anomaly': inference_result.get('is_anomaly', False),
+                'anomaly_threshold': inference_result.get('anomaly_threshold', 0.0),
+                'buffer_size': inference_result.get('buffer_size', len(self.recent_data)),
+                'status': inference_result.get('status', 'unknown'),
+                'input_topic': topic
+            }
+            
+            # Add error information if present
+            if 'error' in inference_result:
+                channels['error'] = str(inference_result['error'])
+            
+            # Add reconstruction statistics if available
+            if 'reconstruction' in inference_result:
+                reconstruction = inference_result['reconstruction']
+                if isinstance(reconstruction, list) and reconstruction:
+                    channels['reconstruction_mean'] = float(np.mean(reconstruction))
+                    channels['reconstruction_std'] = float(np.std(reconstruction))
+                    channels['reconstruction_min'] = float(np.min(reconstruction))
+                    channels['reconstruction_max'] = float(np.max(reconstruction))
+            
+            output_message = {
+                'timestamp': inference_result.get('timestamp', time.time()),
+                'channels': channels
+            }
+            
+            kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
+            return True, [(kafka_topic, json.dumps(output_message))]
+            
+        except Exception as e:
+            logging.error(f"AEMLInferenceThread: Error processing inference message: {e}")
+            return False, []
+
+    def _store_inference_result(self, inference_request: Any, inference_result: Any):
+        """Store inference result to database."""
+        try:
+            # This would use DBManager to store the inference result
+            # Implementation depends on specific data structure
+            pass
+        except Exception as e:
+            logging.error(f"AEMLInferenceThread: Error storing inference result: {e}")
 
 class AutoencoderAgent(AgentBase):
     """
     Autoencoder agent for time series anomaly detection.
-    TODO: Make configurable and generic with registation for component thread classes allowing for configuration based instantiation of an agent
     """
     
     def __init__(self, config_path: str = None):
@@ -664,7 +774,6 @@ class AutoencoderAgent(AgentBase):
         """Create ML inference thread component."""
         return AutoencoderMLInferenceThread(self.agent_id, self.agent_config)
 
-
 def main():
     """Main entry point for autoencoder agent."""
     import os
@@ -685,7 +794,6 @@ def main():
     except Exception as e:
         logging.error(f"Error running autoencoder agent: {e}")
         raise
-
 
 if __name__ == "__main__":
     main()
