@@ -54,11 +54,18 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                 logging.warning(f"AEDataIngestThread: No channels found in message: {data}")
                 return False
                     
-            state_keys = [k for k in channels.keys()
-                        if k.startswith('state_')
-                        and k != 'state_shape'
-                        and k != 'state_is_array'
-                        and isinstance(channels[k], (int, float))]
+            # Handle gymnasium data specially, grab all numeric data for everything else
+            if topic == 'gymnasium-output':  # Gymnasium topic
+                # Look for state_ prefixed keys only
+                state_keys = [k for k in channels.keys()
+                            if k.startswith('state_')
+                            and k != 'state_shape'
+                            and k != 'state_is_array'
+                            and isinstance(channels[k], (int, float))]
+            else:  # EPICS, MQTT, or other data sources
+                # Extract all numeric values
+                state_keys = [k for k in channels.keys()
+                            if isinstance(channels[k], (int, float))]
             
             state_keys.sort()
             state_values = []
@@ -710,11 +717,18 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             if not channels:
                 return None
 
-            state_keys = [k for k in channels.keys()
-                        if k.startswith('state_')
-                        and k != 'state_shape'
-                        and k != 'state_is_array'
-                        and isinstance(channels[k], (int, float))]
+            # Handle gymnasium data specially, grab all numeric data for everything else
+            if topic == 'gymnasium-output':  # Gymnasium topic
+                # Look for state_ prefixed keys only
+                state_keys = [k for k in channels.keys()
+                            if k.startswith('state_')
+                            and k != 'state_shape'
+                            and k != 'state_is_array'
+                            and isinstance(channels[k], (int, float))]
+            else:  # EPICS, MQTT, or other data sources
+                # Extract all numeric values
+                state_keys = [k for k in channels.keys()
+                            if isinstance(channels[k], (int, float))]
             
             state_keys.sort()
             state_values = []

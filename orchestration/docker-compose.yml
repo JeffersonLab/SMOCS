@@ -71,6 +71,7 @@ services:
   epics-kafka-producer:
     extends: source-kafka-producer
     profiles: ["epics"]
+    platform: linux/amd64
     environment:
       EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
     command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
