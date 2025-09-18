@@ -57,7 +57,6 @@ services:
     build:
       context: ../
       dockerfile: ./orchestration/containers/source-kafka-producer/Dockerfile
-    profiles: ["mqtt", "epics"]
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
       CONFIG_PATH: /app/config.yaml
@@ -129,16 +128,14 @@ services:
     build:
       context: ../
       dockerfile: ./orchestration/containers/autoencoder-agent/Dockerfile
-    profiles: ["gymnasium"]
+    profiles: ["gymnasium", "epics", "mqtt"]
     depends_on:
       kafka-broker:
         condition: service_healthy
-      gymnasium-kafka-controller:
-        condition: service_started
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
-      MYSQL_HOST: localhost  # Changed from 'agent' to 'localhost'
-      MYSQL_PORT: 3306       # Changed from 3307 to 3306 (standard MySQL port)
+      MYSQL_HOST: localhost  
+      MYSQL_PORT: 3306
       MYSQL_USER: root
       MYSQL_DATABASE: agentdb
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -147,7 +144,7 @@ services:
     networks:
       - kafka-net
     ports:
-      - "3307:3307"
+      - "3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     restart: unless-stopped

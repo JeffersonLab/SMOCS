@@ -1,4 +1,4 @@
-source: "gymnasium"
+source: "epics"
 
 mqtt:
   topics:      
@@ -49,7 +49,7 @@ autoencoder_agent:
   batch_size: 4
   epochs: 50
   kafka_topics:
-    input: "gymnasium-output"
+    input: "CEBAF"
     output: "autoencoder-anomalies"
     training_output: "autoencoder-training-results"
 
