@@ -158,11 +158,8 @@ class InfluxDBConsumer(KafkaConsumerBase):
             
             # Only add numeric values as fields, skip non-numeric values
             for key, value in data.items():
-                # Check if value is numeric (int, float) or can be converted to numeric
-                if isinstance(value, (int, float)):
-                    point.field(key, float(value))
-                elif isinstance(value, bool):
-                    # Convert boolean to numeric (0 or 1) for InfluxDB compatibility
+                # Check if value is numeric (int, float, book) or can be converted to numeric 
+                if isinstance(value, (int, float)) or isinstance(value, bool):
                     point.field(key, float(value))
                 elif isinstance(value, str):
                     # Try to convert string to float, skip if not possible
