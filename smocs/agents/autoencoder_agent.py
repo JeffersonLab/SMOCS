@@ -3,6 +3,7 @@ import glob
 import json
 import time
 import logging
+import traceback
 import numpy as np
 import pickle
 from typing import Dict, Any, Optional, List, Tuple
@@ -50,10 +51,6 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
             
             # Get sensor readings from channels
             channels = data.get('channels', {})
-            if not channels:
-                logging.warning(f"AEDataIngestThread: No channels found in message: {data}")
-                return False
-                    
             state_keys, state_values = extract_sensor_values(channels, topic)
             
             sensor_values = np.array(state_values, dtype=np.float32)
@@ -169,75 +166,160 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             
             # Get recent sensor data from database - specify agent_type="diagnostics"
             batch_data = self.db_manager.sample_batch(
-                batch_size=self.batch_size*100, # Change this
-                segment_length=self.window_size,  # Use exact window size, not 2x
+                batch_size=self.batch_size*100, 
+                segment_length=self.window_size,  # Use exact window size
                 agent_type="diagnostics",
                 mode="latest"
             )
-            logging.info(f"sample_batch returned {len(batch_data['state'])} sequences")
+            
+            logging.info(f"sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
             
             if batch_data is None or len(batch_data['state']) == 0:
+                logging.warning("AEMLTrainingThread: No batch data returned from database")
                 return None
             
-            windows = []
-            for sequence in batch_data['state']:
-                # Each sequence is already the right length (window_size)
-                if len(sequence) == self.window_size:
-                    try:
-                        # Convert each state in sequence to numpy array first to ensure consistent shape
-                        processed_sequence = []
-                        for state in sequence:
-                            if isinstance(state, np.ndarray):
-                                processed_sequence.append(state.flatten())
-                            else:
-                                # Convert to numpy array if it's not already
-                                state_array = np.array(state, dtype=np.float32)
-                                processed_sequence.append(state_array.flatten())
-                        
-                        # Ensure all states in sequence have the same length
-                        if len(processed_sequence) > 0:
-                            expected_length = len(processed_sequence[0])
-                            valid_sequence = True
-                            for i, state in enumerate(processed_sequence):
-                                if len(state) != expected_length:
-                                    logging.warning(f"AEMLTrainingThread: Inconsistent state length at position {i}: expected {expected_length}, got {len(state)}")
-                                    valid_sequence = False
-                                    break
-                            
-                            if valid_sequence:
-                                # Flatten the entire window (sequence of states)
-                                window = np.concatenate(processed_sequence)
-                                windows.append(window)
-                            else:
-                                logging.warning(f"AEMLTrainingThread: Skipping sequence with inconsistent state shapes")
-                        
-                    except Exception as seq_error:
-                        logging.warning(f"AEMLTrainingThread: Error processing sequence: {seq_error}")
-                        continue
-                else:
-                    logging.debug(f"AEMLTrainingThread: Skipping sequence with length {len(sequence)}, expected {self.window_size}")
-            
-            if not windows:
-                logging.error("AEMLTrainingThread: No valid windows found after processing")
-                return None
-            
-            # Ensure all windows have the same length before creating array
-            if len(windows) > 0:
-                expected_window_length = len(windows[0])
-                filtered_windows = []
-                for i, window in enumerate(windows):
-                    if len(window) == expected_window_length:
-                        filtered_windows.append(window)
+            # Debug: Check the shapes of the first few sequences
+            logging.debug(f"Debugging first 3 sequences:")
+            for i, sequence in enumerate(batch_data['state'][:3]):
+                logging.debug(f"Sequence {i}: length={len(sequence)}")
+                for j, state in enumerate(sequence[:2]):  # Check first 2 states in sequence
+                    if isinstance(state, np.ndarray):
+                        logging.debug(f"  State {j}: shape={state.shape}, type=ndarray, sample_values={state.flatten()[:5] if state.size > 0 else 'empty'}")
+                    elif isinstance(state, (list, tuple)):
+                        logging.debug(f"  State {j}: length={len(state)}, type={type(state).__name__}, sample_values={state[:5] if len(state) > 0 else 'empty'}")
                     else:
-                        logging.warning(f"AEMLTrainingThread: Skipping window {i} with length {len(window)}, expected {expected_window_length}")
-                
-                windows = filtered_windows
+                        logging.debug(f"  State {j}: value={state}, type={type(state).__name__}")
             
-            if not windows:
-                logging.error("AEMLTrainingThread: No windows with consistent length found")
+            # Validate that all sequences have consistent state shapes
+            expected_state_length = None
+            valid_sequences = []
+            
+            for seq_idx, sequence in enumerate(batch_data['state']):
+                # Check sequence length first
+                if len(sequence) != self.window_size:
+                    logging.debug(f"AEMLTrainingThread: Skipping sequence {seq_idx} with length {len(sequence)}, expected {self.window_size}")
+                    continue
+                
+                # Process each state in the sequence
+                sequence_valid = True
+                processed_sequence = []
+                
+                for state_idx, state in enumerate(sequence):
+                    try:
+                        # Convert to numpy array and flatten consistently
+                        if isinstance(state, np.ndarray):
+                            if state.size == 0:
+                                logging.warning(f"AEMLTrainingThread: Empty state array at sequence {seq_idx}, state {state_idx}")
+                                sequence_valid = False
+                                break
+                            state_flat = state.flatten().astype(np.float32)
+                        elif isinstance(state, (list, tuple)):
+                            if len(state) == 0:
+                                logging.warning(f"AEMLTrainingThread: Empty state list at sequence {seq_idx}, state {state_idx}")
+                                sequence_valid = False
+                                break
+                            # Convert list/tuple to numpy array
+                            state_array = np.array(state, dtype=np.float32)
+                            state_flat = state_array.flatten()
+                        elif isinstance(state, (int, float)):
+                            # Single numeric value - convert to array
+                            state_flat = np.array([float(state)], dtype=np.float32)
+                        else:
+                            logging.warning(f"AEMLTrainingThread: Unknown state type at sequence {seq_idx}, state {state_idx}: {type(state)}")
+                            sequence_valid = False
+                            break
+                        
+                        # Validate numeric values
+                        if np.any(np.isnan(state_flat)) or np.any(np.isinf(state_flat)):
+                            logging.warning(f"AEMLTrainingThread: Invalid values (NaN/Inf) at sequence {seq_idx}, state {state_idx}")
+                            sequence_valid = False
+                            break
+                        
+                        # Check state length consistency
+                        if expected_state_length is None:
+                            expected_state_length = len(state_flat)
+                            logging.info(f"AEMLTrainingThread: Expected state length set to {expected_state_length}")
+                        elif len(state_flat) != expected_state_length:
+                            logging.warning(f"AEMLTrainingThread: Sequence {seq_idx}, state {state_idx} has length {len(state_flat)}, expected {expected_state_length}")
+                            sequence_valid = False
+                            break
+                        
+                        processed_sequence.append(state_flat)
+                        
+                    except Exception as state_error:
+                        logging.warning(f"AEMLTrainingThread: Error processing sequence {seq_idx}, state {state_idx}: {state_error}")
+                        logging.warning(f"AEMLTrainingThread: State content: {state}")
+                        sequence_valid = False
+                        break
+                
+                # Add valid sequences to our collection
+                if sequence_valid and len(processed_sequence) == self.window_size:
+                    valid_sequences.append(processed_sequence)
+                else:
+                    if not sequence_valid:
+                        logging.debug(f"AEMLTrainingThread: Sequence {seq_idx} marked invalid")
+                    else:
+                        logging.debug(f"AEMLTrainingThread: Sequence {seq_idx} has wrong length after processing: {len(processed_sequence)}")
+            
+            logging.info(f"AEMLTrainingThread: Kept {len(valid_sequences)} valid sequences out of {len(batch_data['state'])}")
+            
+            if not valid_sequences:
+                logging.error("AEMLTrainingThread: No valid sequences found after shape validation")
                 return None
             
-            windowed_array = np.array(windows, dtype=np.float32)
+            if expected_state_length is None:
+                logging.error("AEMLTrainingThread: Could not determine expected state length")
+                return None
+            
+            # Create windows from valid sequences
+            windows = []
+            expected_window_length = expected_state_length * self.window_size
+            
+            for seq_idx, processed_sequence in enumerate(valid_sequences):
+                try:
+                    # Verify all states in sequence have the same length
+                    sequence_lengths = [len(state) for state in processed_sequence]
+                    if not all(length == expected_state_length for length in sequence_lengths):
+                        logging.warning(f"AEMLTrainingThread: Inconsistent state lengths in valid sequence {seq_idx}: {sequence_lengths}")
+                        continue
+                    
+                    # Flatten the entire window (concatenate all states in sequence)
+                    window = np.concatenate(processed_sequence)
+                    
+                    # Final validation of window shape
+                    if len(window) != expected_window_length:
+                        logging.warning(f"AEMLTrainingThread: Window {seq_idx} has unexpected length {len(window)}, expected {expected_window_length}")
+                        continue
+                    
+                    windows.append(window)
+                    
+                except Exception as window_error:
+                    logging.warning(f"AEMLTrainingThread: Error creating window from sequence {seq_idx}: {window_error}")
+                    continue
+            
+            if not windows:
+                logging.error("AEMLTrainingThread: No valid windows created from valid sequences")
+                return None
+            
+            # Convert to numpy array with final validation
+            try:
+                windowed_array = np.array(windows, dtype=np.float32)
+                
+                # Validate final array shape
+                expected_shape = (len(windows), expected_window_length)
+                if windowed_array.shape != expected_shape:
+                    logging.error(f"AEMLTrainingThread: Final array has unexpected shape {windowed_array.shape}, expected {expected_shape}")
+                    return None
+                
+            except Exception as array_error:
+                logging.error(f"AEMLTrainingThread: Error creating final numpy array: {array_error}")
+                # Try to identify problematic windows
+                window_lengths = [len(w) for w in windows]
+                unique_lengths = set(window_lengths)
+                logging.error(f"AEMLTrainingThread: Window lengths found: {unique_lengths}")
+                return None
+            
+            # Log final statistics
             logging.info(f"Training data shape: {windowed_array.shape}")
             logging.info(f"Training data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
             logging.info(f"Training data mean: {np.mean(windowed_array):.6f}")
@@ -245,14 +327,16 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             logging.info(f"Any NaN values: {np.isnan(windowed_array).any()}")
             logging.info(f"Any infinite values: {np.isinf(windowed_array).any()}")
             
+            # Update training count
             self.last_training_count = total_samples
             
-            logging.info(f"AEMLTrainingThread: Prepared {len(windowed_array)} training windows from {total_samples} total samples")
+            logging.info(f"AEMLTrainingThread: Successfully prepared {len(windowed_array)} training windows from {total_samples} total samples")
             return windowed_array
             
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
-            logging.error(f"Exception details: {type(e).__name__}: {str(e)}")
+            logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
+            logging.error(f"AEMLTrainingThread: Full traceback: {traceback.format_exc()}")
             return None
     
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
@@ -691,11 +775,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
             data = json.loads(message)
             
-            channels = data.get('channels', {})
-            if not channels:
-                logging.warning(f"AEMLInferenceThread: No channels found in message: {data}")
-                return False
-            
+            channels = data.get('channels', {})            
             state_keys, state_values = extract_sensor_values(channels, topic)
 
             # Convert to numpy array for storage
@@ -843,7 +923,7 @@ class AutoencoderAgent(AgentBase):
 
 def main():
     """Main entry point for autoencoder agent."""
-    import os
+
     
     # Set up logging
     logging.basicConfig(

@@ -4,6 +4,7 @@ Utilized both in the agent ML inference thread and the Data ingestion thread.
 """
 
 import logging
+import numpy as np
 from typing import Dict, Any, List, Tuple
 
 def extract_sensor_values(channels: Dict[str, Any], topic: str) -> Tuple[List[str], List[float]]:
@@ -40,9 +41,14 @@ def extract_sensor_values(channels: Dict[str, Any], topic: str) -> Tuple[List[st
     for key in state_keys:
         try:
             value = float(channels[key])
+            # Validate that we got a single numeric value
+            if not isinstance(value, (int, float)) or np.isnan(value) or np.isinf(value):
+                logging.warning(f"extract_sensor_values: Invalid numeric value: {key}={value}")
+                continue
             state_values.append(value)
-        except (ValueError, TypeError):
-            logging.warning(f"extract_sensor_values: Skipping non-numeric state value: {key}={channels[key]}")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"extract_sensor_values: Skipping non-numeric state value: {key}={channels[key]}, error: {e}")
             continue
     
+    logging.debug(f"extract_sensor_values: Extracted {len(state_values)} values from topic '{topic}'")
     return state_keys, state_values

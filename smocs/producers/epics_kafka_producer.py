@@ -37,8 +37,7 @@ class EpicsKafkaProducer(KafkaProducerBase):
             with open(config_path, 'rb') as file:
                 config = yaml.safe_load(file)
         except Exception as e:
-            logging.error("EPICS Kafka Producer: error in reading config file")
-            print(e)
+            logging.error(f"EPICS Kafka Producer: error in reading config file: {e}")
             sys.exit(1)
         
         self.pv_list = config['epics']['PVs']
@@ -79,13 +78,13 @@ class EpicsKafkaProducer(KafkaProducerBase):
                 # Convert EPICS topic to valid Kafka topic name
                 kafka_topic = self.sanitize_topic_name(self.source)
                     
-                logging.info(f"EPICS received from '{self.source}' timestamp {timestamp}: ", channels)
+                logging.debug(f"EPICS received from '{self.source}' timestamp {timestamp}: ", channels)
                 
-                print(f"Type of kafka message: {type(message)}")
+                logging.debug(f"Type of kafka message: {type(message)}")
                 # Send to Kafka using base class method
                 record_metadata = self.send_to_kafka(kafka_topic, message)
                 
-                logging.info(f'Forwarded to Kafka topic "{kafka_topic}" (from EPICS "{self.source}") - partition {record_metadata.partition}, offset {record_metadata.offset}')
+                logging.debug(f'Forwarded to Kafka topic "{kafka_topic}" (from EPICS "{self.source}") - partition {record_metadata.partition}, offset {record_metadata.offset}')
                     
             
         except KeyboardInterrupt:
