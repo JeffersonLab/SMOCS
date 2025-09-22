@@ -57,6 +57,7 @@ services:
     build:
       context: ../
       dockerfile: ./orchestration/containers/source-kafka-producer/Dockerfile
+    profiles: ["base-only"]
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
       CONFIG_PATH: /app/config.yaml
