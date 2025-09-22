@@ -135,10 +135,10 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
-      MYSQL_HOST: localhost  
-      MYSQL_PORT: 3306
-      MYSQL_USER: root
-      MYSQL_DATABASE: agentdb
+      MYSQL_HOST: ${MYSQL_HOST}  
+      MYSQL_PORT: ${MYSQL_PORT}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CONFIG_PATH: /app/config.yaml
       PYTHONPATH: /app
