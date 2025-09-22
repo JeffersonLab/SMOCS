@@ -3,7 +3,7 @@ import logging
 import time
 from typing import List, Tuple
 from smocs.cores import KafkaConsumerBase, KafkaProducerBase
-
+from smocs.utils import validate_topic_format, validate_message_format
 
 class KafkaStreamingProcessBase(KafkaConsumerBase):
     """
@@ -98,14 +98,14 @@ class KafkaStreamingProcessBase(KafkaConsumerBase):
                         try:
                             # Validate input topic format
                             try:
-                                self.validate_topic_format(message.topic)
+                                validate_topic_format(message.topic)
                             except ValueError as e:
                                 logging.error(f"Invalid input topic format from {message.topic}:{message.partition}:{message.offset}: {e}")
                                 continue
                             
                             # Validate input message format
                             try:
-                                self.validate_message_format(message.value)
+                                validate_message_format(message.value)
                             except ValueError as e:
                                 logging.error(f"Invalid input message format from {message.topic}:{message.partition}:{message.offset}: {e}")
                                 logging.debug(f"Invalid message content: {message.value}")
