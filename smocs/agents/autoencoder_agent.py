@@ -15,7 +15,7 @@ from tensorflow.keras import layers
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
 from smocs.utils import ConfigLoader, extract_sensor_values
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 class AutoencoderDataIngestThread(DataIngestThreadBase):
     """
@@ -320,12 +320,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 return None
             
             # Log final statistics
-            logging.info(f"Training data shape: {windowed_array.shape}")
-            logging.info(f"Training data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
-            logging.info(f"Training data mean: {np.mean(windowed_array):.6f}")
-            logging.info(f"Training data std: {np.std(windowed_array):.6f}")
-            logging.info(f"Any NaN values: {np.isnan(windowed_array).any()}")
-            logging.info(f"Any infinite values: {np.isinf(windowed_array).any()}")
+            logging.debug(f"Training data shape: {windowed_array.shape}")
+            logging.debug(f"Training data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
+            logging.debug(f"Training data mean: {np.mean(windowed_array):.6f}")
+            logging.debug(f"Training data std: {np.std(windowed_array):.6f}")
+            logging.debug(f"Any NaN values: {np.isnan(windowed_array).any()}")
+            logging.debug(f"Any infinite values: {np.isinf(windowed_array).any()}")
             
             # Update training count
             self.last_training_count = total_samples
@@ -857,14 +857,63 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             logging.error(f"AEMLInferenceThread: Error processing inference message: {e}")
             return False, []
 
-    def _store_inference_result(self, inference_request: Any, inference_result: Any):
-        """Store inference result to database."""
+    def _store_inference_result(self, inference_request: Dict[str, Any], inference_result: Dict[str, Any]):
+        """Store inference result to database using DBManager's record_prediction function."""
         try:
-            # This would use DBManager to store the inference result
-            # Implementation depends on specific data structure
-            pass
+            if 'error' in inference_result or inference_result.get('status') == 'error':
+                logging.warning(f"AEMLInferenceThread: Not storing inference result due to error: {inference_result.get('error', 'unknown error')}")
+                return
+
+            # Extract timestamp from inference request
+            source_timestamp = inference_request.get('timestamp')
+            if source_timestamp is None:
+                logging.warning("AEMLInferenceThread: No timestamp in inference request, cannot store result")
+                return
+            
+            # Convert timestamp to proper format if needed
+            if isinstance(source_timestamp, (int, float)):
+                # Convert Unix timestamp to datetime string
+                timestamp_dt = datetime.fromtimestamp(source_timestamp)
+                source_timestamp_str = timestamp_dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+            else:
+                source_timestamp_str = str(source_timestamp)
+            
+            # Create prediction array from inference result
+            # The reconstruction represents the model's prediction
+            reconstruction = inference_result.get('reconstruction')
+            if reconstruction is None:
+                logging.warning("AEMLInferenceThread: No reconstruction in inference result, cannot store prediction")
+                return
+            
+            # Convert reconstruction to numpy array
+            if isinstance(reconstruction, list):
+                prediction_array = np.array(reconstruction, dtype=np.float32)
+            elif isinstance(reconstruction, np.ndarray):
+                prediction_array = reconstruction.astype(np.float32)
+            else:
+                logging.warning(f"AEMLInferenceThread: Unexpected reconstruction type: {type(reconstruction)}")
+                return
+            
+            # Get current timestamp for prediction timestamp
+            prediction_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+            
+            # Use record_prediction to store the inference result
+            # This will update the existing agent_inferences record with the prediction
+            status = self.db_manager.record_prediction(
+                prediction=prediction_array,
+                prediction_timestamp=prediction_timestamp,
+                key_value=source_timestamp_str,
+                key="state_source_timestamp"
+            )
+            
+            if status == 0:
+                logging.info(f"AEMLInferenceThread: Successfully stored inference result for timestamp {source_timestamp_str}")
+            else:
+                logging.error(f"AEMLInferenceThread: Failed to store inference result, status: {status}")
+            
         except Exception as e:
             logging.error(f"AEMLInferenceThread: Error storing inference result: {e}")
+            logging.error(f"AEMLInferenceThread: Exception details: {type(e).__name__}: {str(e)}")
 
 class AutoencoderAgent(AgentBase):
     """

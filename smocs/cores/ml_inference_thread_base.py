@@ -99,6 +99,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
             logging.error(f"MLInfernceThread: Error processing inference message: {e}")
             return False, []
     
+    @abstractmethod
     def _store_inference_result(self, inference_request: Any, inference_result: Any):
         """Store inference result to database."""
         try:
