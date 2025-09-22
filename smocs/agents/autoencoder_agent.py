@@ -12,7 +12,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
-from smocs.utils import ConfigLoader
+from smocs.utils import ConfigLoader, extract_sensor_values
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -54,28 +54,7 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                 logging.warning(f"AEDataIngestThread: No channels found in message: {data}")
                 return False
                     
-            # Handle gymnasium data specially, grab all numeric data for everything else
-            if topic == 'gymnasium-output':  # Gymnasium topic
-                # Look for state_ prefixed keys only
-                state_keys = [k for k in channels.keys()
-                            if k.startswith('state_')
-                            and k != 'state_shape'
-                            and k != 'state_is_array'
-                            and isinstance(channels[k], (int, float))]
-            else:  # EPICS, MQTT, or other data sources
-                # Extract all numeric values
-                state_keys = [k for k in channels.keys()
-                            if isinstance(channels[k], (int, float))]
-            
-            state_keys.sort()
-            state_values = []
-            for key in state_keys:
-                try:
-                    value = float(channels[key])
-                    state_values.append(value)
-                except (ValueError, TypeError):
-                    logging.warning(f"AEDataIngestThread: Skipping non-numeric state value: {key}={channels[key]}")
-                    continue
+            state_keys, state_values = extract_sensor_values(channels, topic)
             
             sensor_values = np.array(state_values, dtype=np.float32)
             
@@ -541,7 +520,6 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 return
             
             # Load the TensorFlow model
-            import tensorflow as tf
             self.model = tf.keras.models.load_model(model_file)
             
             # Update instance variables from metadata
@@ -715,30 +693,10 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
             channels = data.get('channels', {})
             if not channels:
-                return None
-
-            # Handle gymnasium data specially, grab all numeric data for everything else
-            if topic == 'gymnasium-output':  # Gymnasium topic
-                # Look for state_ prefixed keys only
-                state_keys = [k for k in channels.keys()
-                            if k.startswith('state_')
-                            and k != 'state_shape'
-                            and k != 'state_is_array'
-                            and isinstance(channels[k], (int, float))]
-            else:  # EPICS, MQTT, or other data sources
-                # Extract all numeric values
-                state_keys = [k for k in channels.keys()
-                            if isinstance(channels[k], (int, float))]
+                logging.warning(f"AEMLInferenceThread: No channels found in message: {data}")
+                return False
             
-            state_keys.sort()
-            state_values = []
-            for key in state_keys:
-                try:
-                    value = float(channels[key])
-                    state_values.append(value)
-                except (ValueError, TypeError):
-                    logging.warning(f"AEMLInferenceThread: Skipping non-numeric state value: {key}={channels[key]}")
-                    continue
+            state_keys, state_values = extract_sensor_values(channels, topic)
 
             # Convert to numpy array for storage
             sensor_values = np.array(state_values, dtype=np.float32)
