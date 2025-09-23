@@ -126,11 +126,11 @@ services:
       - kafka-net
     command: ["sh", "-c", "sleep 15 && exec python -m smocs.consumers.influxdb_kafka_consumer"]
 
-  autoencoder-agent:
+  agent:
     build:
       context: ../
-      dockerfile: ./orchestration/containers/autoencoder-agent/Dockerfile
-    profiles: ["gymnasium", "epics", "mqtt"]
+      dockerfile: ./orchestration/containers/agent/Dockerfile
+    profiles: ["base-only"]
     depends_on:
       kafka-broker:
         condition: service_healthy
@@ -152,6 +152,11 @@ services:
     restart: unless-stopped
     command: ["/bin/bash", "/entrypoint.sh"]
 
+  autoencoder-agent:
+    extends: agent
+    profiles: ["autoencoder"]
+    environment:
+      AGENT_TYPE: autoencoder
 
 volumes:
   influxdb-data:
