@@ -48,7 +48,7 @@ autoencoder_agent:
   learning_rate: 0.001
   batch_size: 4
   epochs: 50
-  enabled_threads: ['ingest', 'training']
+  enabled_threads: ['ingest', 'training', 'inference']
   kafka_topics:
     input: "CEBAF"
     output: "autoencoder-anomalies"
