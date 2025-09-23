@@ -165,40 +165,54 @@ class AgentBase(ABC):
     
     def _start_component_threads(self):
         """Start all component threads."""
-        # Start data ingest thread
-        data_ingest_thread_obj = threading.Thread(
-            target=self.data_ingest_thread.start,
-            name=f"{self.agent_id}-data-ingest"
-        )
-        data_ingest_thread_obj.daemon = True
-        data_ingest_thread_obj.start()
-        self.thread_objects['data_ingest'] = data_ingest_thread_obj
+        # Start data ingest thread if it exists
+        if self.data_ingest_thread is not None:
+            data_ingest_thread_obj = threading.Thread(
+                target=self.data_ingest_thread.start,
+                name=f"{self.agent_id}-data-ingest"
+            )
+            data_ingest_thread_obj.daemon = True
+            data_ingest_thread_obj.start()
+            self.thread_objects['data_ingest'] = data_ingest_thread_obj
+        else:
+            logging.info("Data ingest thread not enabled, skipping...")
         
-        # Start ML training thread  
-        ml_training_thread_obj = threading.Thread(
-            target=self.ml_training_thread.start,
-            name=f"{self.agent_id}-ml-training"
-        )
-        ml_training_thread_obj.daemon = True
-        ml_training_thread_obj.start()
-        self.thread_objects['ml_training'] = ml_training_thread_obj
+        # Start ML training thread if it exists
+        if self.ml_training_thread is not None:
+            ml_training_thread_obj = threading.Thread(
+                target=self.ml_training_thread.start,
+                name=f"{self.agent_id}-ml-training"
+            )
+            ml_training_thread_obj.daemon = True
+            ml_training_thread_obj.start()
+            self.thread_objects['ml_training'] = ml_training_thread_obj
+        else:
+            logging.info("ML training thread not enabled, skipping...")
         
-        # Start ML inference thread
-        ml_inference_thread_obj = threading.Thread(
-            target=self.ml_inference_thread.start,
-            name=f"{self.agent_id}-ml-inference"
-        )
-        ml_inference_thread_obj.daemon = True
-        ml_inference_thread_obj.start()
-        self.thread_objects['ml_inference'] = ml_inference_thread_obj
+        # Start ML inference thread if it exists
+        if self.ml_inference_thread is not None:
+            ml_inference_thread_obj = threading.Thread(
+                target=self.ml_inference_thread.start,
+                name=f"{self.agent_id}-ml-inference"
+            )
+            ml_inference_thread_obj.daemon = True
+            ml_inference_thread_obj.start()
+            self.thread_objects['ml_inference'] = ml_inference_thread_obj
+        else:
+            logging.info("ML inference thread not enabled, skipping...")
         
-        # Wait for threads to start
-        time.sleep(2)
+        # Wait for threads to start (only if any threads were started)
+        if self.thread_objects:
+            time.sleep(2)
         
         # Update agent status to running
-        self.update_agent_status({'status': 'running', 'threads_started_time': time.time()})
+        self.update_agent_status({
+            'status': 'running', 
+            'threads_started_time': time.time(),
+            'active_threads': list(self.thread_objects.keys())
+        })
         
-        logging.info("All component threads started")
+        logging.info(f"Component threads started: {list(self.thread_objects.keys())}")
     
     def _thread_monitoring(self):
         """Monitor thread health and restart if necessary."""
@@ -223,35 +237,44 @@ class AgentBase(ABC):
                 logging.warning(f"Thread {thread_name} is not alive. Attempting restart...")
                 try:
                     # Restart the specific thread
-                    if thread_name == 'data_ingest':
+                    if thread_name == 'data_ingest' and self.data_ingest_thread is not None:
                         self.data_ingest_thread = self.create_data_ingest_component()
-                        new_thread = threading.Thread(
-                            target=self.data_ingest_thread.start,
-                            name=f"{self.agent_id}-data-ingest"
-                        )
-                    elif thread_name == 'ml_training':
+                        if self.data_ingest_thread is not None:
+                            new_thread = threading.Thread(
+                                target=self.data_ingest_thread.start,
+                                name=f"{self.agent_id}-data-ingest"
+                            )
+                    elif thread_name == 'ml_training' and self.ml_training_thread is not None:
                         self.ml_training_thread = self.create_ml_training_component()
-                        new_thread = threading.Thread(
-                            target=self.ml_training_thread.start,
-                            name=f"{self.agent_id}-ml-training"
-                        )
-                    elif thread_name == 'ml_inference':
+                        if self.ml_training_thread is not None:
+                            new_thread = threading.Thread(
+                                target=self.ml_training_thread.start,
+                                name=f"{self.agent_id}-ml-training"
+                            )
+                    elif thread_name == 'ml_inference' and self.ml_inference_thread is not None:
                         self.ml_inference_thread = self.create_ml_inference_component()
-                        new_thread = threading.Thread(
-                            target=self.ml_inference_thread.start,
-                            name=f"{self.agent_id}-ml-inference"
-                        )
+                        if self.ml_inference_thread is not None:
+                            new_thread = threading.Thread(
+                                target=self.ml_inference_thread.start,
+                                name=f"{self.agent_id}-ml-inference"
+                            )
+                    else:
+                        logging.info(f"Thread {thread_name} is disabled, removing from monitoring")
+                        # Remove from thread_objects since it's disabled
+                        del self.thread_objects[thread_name]
+                        continue
                     
-                    new_thread.daemon = True
-                    new_thread.start()
-                    self.thread_objects[thread_name] = new_thread
-                    logging.info(f"Thread {thread_name} restarted successfully")
-                    
-                    # Update agent status with thread restart info
-                    self.update_agent_status({
-                        f'{thread_name}_restart_time': time.time(),
-                        'status': 'running'
-                    })
+                    if 'new_thread' in locals():
+                        new_thread.daemon = True
+                        new_thread.start()
+                        self.thread_objects[thread_name] = new_thread
+                        logging.info(f"Thread {thread_name} restarted successfully")
+                        
+                        # Update agent status with thread restart info
+                        self.update_agent_status({
+                            f'{thread_name}_restart_time': time.time(),
+                            'status': 'running'
+                        })
                     
                 except Exception as e:
                     logging.error(f"Failed to restart thread {thread_name}: {e}")

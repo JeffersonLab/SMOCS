@@ -208,7 +208,7 @@ class DBManager:
                 config = {}
             if info is None:
                 info = {
-                    'registration_time': time.time(),
+                    'startup_time': time.time(),
                     'status': 'starting'
                 }
             
@@ -248,9 +248,10 @@ class DBManager:
             int: Status code (0 for success, 1 for error)
         """
         try:
-            # First, get the existing info
+            # First, get the existing info using parameterized query
             query = "SELECT info FROM agent_information WHERE registered_id = %s"
-            results = self.__execute_query(query)
+            self.db_cursor.execute(query, (agent_id,))
+            results = self.db_cursor.fetchall()
             
             if not results:
                 logging.error(f"Agent {agent_id} not found in database")

@@ -927,6 +927,8 @@ class AutoencoderAgent(AgentBase):
         if config_path:
             config_loader = ConfigLoader(config_path)
             autoencoder_config = config_loader.config.get('autoencoder_agent', {})
+            # Get enabled threads directly from config
+            self.enabled_threads = autoencoder_config.get('enabled_threads', ['ingest', 'training', 'inference'])
         else:
             # Default configuration
             autoencoder_config = {
@@ -942,6 +944,8 @@ class AutoencoderAgent(AgentBase):
                     'training_output': 'autoencoder-training-results'
                 }
             }
+            # Default to all threads when no config file
+            self.enabled_threads = ['ingest', 'training', 'inference']
         
         # Ensure kafka_topics are included in the config passed to threads
         if 'kafka_topics' not in autoencoder_config:
@@ -957,18 +961,25 @@ class AutoencoderAgent(AgentBase):
         self.agent_config['agent_id'] = self.agent_id
         
         logging.info(f"AEAgent: AutoencoderAgent initialized with config: {self.agent_config}")
+        logging.info(f"AEAgent: Enabled threads: {self.enabled_threads}")
     
     def create_data_ingest_component(self):
         """Create data ingestion thread component."""
-        return AutoencoderDataIngestThread(self.agent_id, self.agent_config)
+        if 'ingest' in self.enabled_threads:
+            return AutoencoderDataIngestThread(self.agent_id, self.agent_config)
+        return None
     
     def create_ml_training_component(self):
         """Create ML training thread component."""
-        return AutoencoderMLTrainingThread(self.agent_id, self.agent_config)
+        if 'training' in self.enabled_threads:
+            return AutoencoderMLTrainingThread(self.agent_id, self.agent_config)
+        return None
     
     def create_ml_inference_component(self):
         """Create ML inference thread component."""
-        return AutoencoderMLInferenceThread(self.agent_id, self.agent_config)
+        if 'inference' in self.enabled_threads:
+            return AutoencoderMLInferenceThread(self.agent_id, self.agent_config)
+        return None
 
 def main():
     """Main entry point for autoencoder agent."""
