@@ -5,7 +5,6 @@ import os
 import uuid
 from abc import ABC, abstractmethod
 from typing import Dict, Any
-import pickle
 
 from smocs.db.mysql_api_v0 import DBManager
 
@@ -53,6 +52,36 @@ class AgentBase(ABC):
         }
         return DBManager(db_config)
     
+    def _prepare_agent_data(self, custom_config=None, custom_info=None):
+        """
+        Prepare agent data for registration.
+        Can be overridden by subclasses to provide custom configuration and info.
+        
+        Args:
+            custom_config (dict, optional): Custom configuration to use instead of default
+            custom_info (dict, optional): Custom info to use instead of default
+            
+        Returns:
+            tuple: (config_dict, info_dict)
+        """
+        # Default configuration - can be overridden by subclasses
+        config = custom_config if custom_config is not None else {
+            'agent_type': self.__class__.__name__,
+            'initialization_params': {
+                'agent_name': self.agent_name
+            }
+        }
+        
+        # Default info - can be overridden by subclasses  
+        info = custom_info if custom_info is not None else {
+            'registration_time': time.time(),
+            'status': 'starting',
+            'agent_class': self.__class__.__name__,
+            'agent_module': self.__class__.__module__
+        }
+        
+        return config, info
+    
     def start(self):
         """Start the agent and all its threads."""
         try:
@@ -79,37 +108,51 @@ class AgentBase(ABC):
             raise
     
     def _register_agent(self):
-        """Register this agent in the database."""
+        """Register this agent in the database using DBManager's register_agent method."""
         try:
-            agent_data = {
-                'registered_id': self.agent_id,
-                'agent_name': self.agent_name,
-                'config': pickle.dumps({}),  # Empty config - to be filled by concrete implementations
-                'info': pickle.dumps({
-                    'startup_time': time.time(),
-                    'status': 'starting'
-                })
-            }
+            # Prepare agent data (can be customized by subclasses)
+            config, info = self._prepare_agent_data()
             
-            # Insert into agent_information table
-            query = """INSERT INTO agent_information 
-                      (registered_id, agent_name, config, info) 
-                      VALUES (%s, %s, %s, %s)"""
-            values = (
-                agent_data['registered_id'],
-                agent_data['agent_name'], 
-                agent_data['config'],
-                agent_data['info']
+            # Use DBManager's register_agent method
+            status = self.db_manager.register_agent(
+                agent_id=self.agent_id,
+                agent_name=self.agent_name,
+                config=config,
+                info=info
             )
             
-            status = self.db_manager._DBManager__execute_and_commit(query, values)
-            if status == 0:
-                logging.info(f"Agent {self.agent_id} registered in database")
-            else:
+            if status != 0:
                 logging.error("Failed to register agent in database")
+                raise Exception("Agent registration failed")
                 
         except Exception as e:
             logging.error(f"Error registering agent: {e}")
+            raise e
+    
+    def update_agent_status(self, status_updates):
+        """
+        Update agent status information in the database.
+        
+        Args:
+            status_updates (dict): Dictionary containing status updates to merge with existing info
+        """
+        try:
+            self.db_manager.update_agent_info(self.agent_id, status_updates)
+        except Exception as e:
+            logging.error(f"Error updating agent status: {e}")
+    
+    def get_agent_info(self):
+        """
+        Retrieve agent information from the database.
+        
+        Returns:
+            dict: Agent information or None if not found
+        """
+        try:
+            return self.db_manager.get_agent_info(self.agent_id)
+        except Exception as e:
+            logging.error(f"Error retrieving agent info: {e}")
+            return None
     
     def _create_component_threads(self):
         """Create the three component threads."""
@@ -151,6 +194,9 @@ class AgentBase(ABC):
         
         # Wait for threads to start
         time.sleep(2)
+        
+        # Update agent status to running
+        self.update_agent_status({'status': 'running', 'threads_started_time': time.time()})
         
         logging.info("All component threads started")
     
@@ -201,12 +247,27 @@ class AgentBase(ABC):
                     self.thread_objects[thread_name] = new_thread
                     logging.info(f"Thread {thread_name} restarted successfully")
                     
+                    # Update agent status with thread restart info
+                    self.update_agent_status({
+                        f'{thread_name}_restart_time': time.time(),
+                        'status': 'running'
+                    })
+                    
                 except Exception as e:
                     logging.error(f"Failed to restart thread {thread_name}: {e}")
+                    # Update agent status with error info
+                    self.update_agent_status({
+                        'status': 'error',
+                        'last_error': str(e),
+                        'error_time': time.time()
+                    })
     
     def stop(self):
         """Stop the agent and all threads."""
         logging.info("Stopping agent...")
+        
+        # Update agent status to stopping
+        self.update_agent_status({'status': 'stopping', 'stop_time': time.time()})
         
         # Stop all thread components
         if self.data_ingest_thread and hasattr(self.data_ingest_thread, 'stop'):
@@ -220,6 +281,9 @@ class AgentBase(ABC):
         for thread_obj in self.thread_objects.values():
             if thread_obj.is_alive():
                 thread_obj.join(timeout=5)
+        
+        # Update agent status to stopped
+        self.update_agent_status({'status': 'stopped', 'stopped_time': time.time()})
         
         self.cleanup()
         logging.info("Agent stopped")

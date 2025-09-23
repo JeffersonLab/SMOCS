@@ -186,6 +186,133 @@ class DBManager:
         """
         self.__execute_and_commit(query)
 
+    def register_agent(self, agent_id, agent_name, config=None, info=None):
+        """
+        Register an agent in the database.
+        
+        Args:
+            agent_id (str): The unique identifier for the agent
+            agent_name (str): The name of the agent
+            config (dict, optional): Configuration dictionary for the agent. Defaults to empty dict.
+            info (dict, optional): Additional information dictionary for the agent. Defaults to empty dict.
+            
+        Returns:
+            int: Status code (0 for success, 1 for error)
+            
+        Raises:
+            Exception: If there is an error executing the database query
+        """
+        try:
+            # Set defaults if not provided
+            if config is None:
+                config = {}
+            if info is None:
+                info = {
+                    'registration_time': time.time(),
+                    'status': 'starting'
+                }
+            
+            # Prepare the data for insertion
+            query = """INSERT INTO agent_information 
+                      (registered_id, agent_name, config, info) 
+                      VALUES (%s, %s, %s, %s)"""
+            values = (
+                agent_id,
+                agent_name,
+                pickle.dumps(config),
+                pickle.dumps(info)
+            )
+            
+            status = self.__execute_and_commit(query, values)
+            
+            if status == 0:
+                logging.info(f"Agent {agent_id} ({agent_name}) registered successfully in database")
+            else:
+                logging.error(f"Failed to register agent {agent_id} in database")
+                
+            return status
+            
+        except Exception as e:
+            logging.error(f"Error registering agent {agent_id}: {e}")
+            raise e
+
+    def update_agent_info(self, agent_id, info_updates):
+        """
+        Update agent information in the database.
+        
+        Args:
+            agent_id (str): The unique identifier for the agent
+            info_updates (dict): Dictionary containing the updates to merge with existing info
+            
+        Returns:
+            int: Status code (0 for success, 1 for error)
+        """
+        try:
+            # First, get the existing info
+            query = "SELECT info FROM agent_information WHERE registered_id = %s"
+            results = self.__execute_query(query)
+            
+            if not results:
+                logging.error(f"Agent {agent_id} not found in database")
+                return 1
+            
+            # Deserialize existing info
+            existing_info = pickle.loads(results[0]['info']) if results[0]['info'] else {}
+            
+            # Merge with updates
+            existing_info.update(info_updates)
+            
+            # Update the database
+            update_query = "UPDATE agent_information SET info = %s WHERE registered_id = %s"
+            values = (pickle.dumps(existing_info), agent_id)
+            
+            status = self.__execute_and_commit(update_query, values)
+            
+            if status == 0:
+                logging.info(f"Agent {agent_id} info updated successfully")
+            else:
+                logging.error(f"Failed to update agent {agent_id} info")
+                
+            return status
+            
+        except Exception as e:
+            logging.error(f"Error updating agent {agent_id} info: {e}")
+            raise e
+
+    def get_agent_info(self, agent_id):
+        """
+        Retrieve agent information from the database.
+        
+        Args:
+            agent_id (str): The unique identifier for the agent
+            
+        Returns:
+            dict: Agent information including config and info, or None if not found
+        """
+        try:
+            query = "SELECT * FROM agent_information WHERE registered_id = %s"
+            self.db_cursor.execute(query, (agent_id,))
+            result = self.db_cursor.fetchone()
+            
+            if not result:
+                logging.warning(f"Agent {agent_id} not found in database")
+                return None
+            
+            # Deserialize pickled data
+            agent_info = {
+                'id': result['id'],
+                'registered_id': result['registered_id'],
+                'agent_name': result['agent_name'],
+                'config': pickle.loads(result['config']) if result['config'] else {},
+                'info': pickle.loads(result['info']) if result['info'] else {}
+            }
+            
+            return agent_info
+            
+        except Exception as e:
+            logging.error(f"Error retrieving agent {agent_id} info: {e}")
+            raise e
+
     def parse_results(self, results):
         """
         Parses the results from the database query, converting any decimal.Decimal or bytes types to appropriate formats.
@@ -584,4 +711,4 @@ class DBManager:
         logging.info("db connection closed")
 
 
-# DOCUMENTATION: notifies of database error if connection fails 
+# DOCUMENTATION: notifies of database error if connection fails
