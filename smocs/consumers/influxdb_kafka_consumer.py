@@ -6,9 +6,7 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from smocs.cores import KafkaConsumerBase
-
-logging.basicConfig(level=logging.INFO)
-
+from smocs.utils import ChannelFilter, setup_logging
 
 class InfluxDBConsumer(KafkaConsumerBase):
     """
@@ -142,41 +140,37 @@ class InfluxDBConsumer(KafkaConsumerBase):
     
     def create_influx_point(self, message, topic):
         """
-        Create an InfluxDB point from message data.
+        Create an InfluxDB point from message data using channel filtering.
         
         Args:
-            data (dict): Parsed message data
+            message (dict): Parsed message data
             topic (str): Kafka topic name
             
         Returns:
             Point or None: InfluxDB point or None if creation failed
         """
         try:
-            data = message['channels']
+            # Use ChannelFilter to extract all numeric channels
+            filtered_result = ChannelFilter.extract_all_channels(message)
             
+            if filtered_result is None:
+                logging.warning(f"No valid numeric channels found for topic {topic}")
+                return None
+            
+            channel_names, channel_values = filtered_result
+            
+            # Create InfluxDB point
             point = Point(topic)
             
-            # Only add numeric values as fields, skip non-numeric values
-            for key, value in data.items():
-                # Check if value is numeric (int, float, book) or can be converted to numeric 
-                if isinstance(value, (int, float, bool)):
-                    point.field(key, float(value))
-                elif isinstance(value, str):
-                    # Try to convert string to float, skip if not possible
-                    try:
-                        numeric_value = float(value)
-                        point.field(key, numeric_value)
-                    except (ValueError, TypeError):
-                        logging.debug(f"Skipping non-numeric string field: {key}={value}")
-                        continue
-                else:
-                    # Skip non-numeric types (lists, dicts, etc.)
-                    logging.debug(f"Skipping non-numeric field: {key}={value} (type: {type(value)})")
-                    continue
-        
-            # Optionally use the original timestamp
-            # point.time(data['timeStamp'])
+            # Add all numeric fields to the point
+            for name, value in zip(channel_names, channel_values):
+                point.field(name, value)
             
+            # Optionally use the original timestamp
+            # if 'timestamp' in message:
+            #     point.time(message['timestamp'])
+            
+            logging.debug(f"Created InfluxDB point with {len(channel_values)} fields for topic {topic}")
             return point
             
         except Exception as e:
@@ -203,6 +197,7 @@ def main():
     """
     Main entry point for the InfluxDB consumer.
     """
+    setup_logging()
     logging.info("Starting InfluxDB consumer...")
     
     consumer = InfluxDBConsumer()

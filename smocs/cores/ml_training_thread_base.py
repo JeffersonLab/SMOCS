@@ -8,8 +8,6 @@ from typing import Dict, Any, Optional
 from smocs.cores import KafkaProducerBase
 from smocs.db.mysql_api_v0 import DBManager
 
-logging.basicConfig(level=logging.INFO)
-
 class MLTrainingThreadBase(KafkaProducerBase, ABC):
     """
     Base class for ML training thread.

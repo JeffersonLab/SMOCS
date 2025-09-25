@@ -8,8 +8,6 @@ from typing import Dict, Any
 
 from smocs.db.mysql_api_v0 import DBManager
 
-logging.basicConfig(level=logging.INFO)
-
 class AgentBase(ABC):
     """
     Base class for SMOCS agents.

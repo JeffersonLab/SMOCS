@@ -12,8 +12,6 @@ import decimal
 import time
 import pickle
 
-logging.basicConfig(level=logging.INFO)
-
 class DBManager:
 
     # Function to connect with db

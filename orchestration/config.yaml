@@ -49,6 +49,16 @@ autoencoder_agent:
   batch_size: 4
   epochs: 50
   enabled_threads: ['ingest', 'training', 'inference']
+  model_input:
+      channels:
+      - IPM9A01.PHAS
+      - IPM9A02.XPOS
+      - IPM9A02.YPOS
+  model_output:
+      channels:
+      - IPM9A01.PHAS
+      - IPM9A02.XPOS
+      - IPM9A02.YPOS
   kafka_topics:
     input: "CEBAF"
     output: "autoencoder-anomalies"

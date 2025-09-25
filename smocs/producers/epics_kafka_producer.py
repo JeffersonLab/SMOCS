@@ -9,9 +9,7 @@ from pathlib import Path
 import time
 
 from smocs.cores import KafkaProducerBase
-
-logging.basicConfig(level=logging.INFO)
-
+from smocs.utils import setup_logging
 
 class EpicsKafkaProducer(KafkaProducerBase):
     """
@@ -100,7 +98,7 @@ def main():
     """
     Main entry point for the EPICS to Kafka producer.
     """
-    
+    setup_logging()
     logging.info("Starting EPICS-to-Kafka bridge with topic preservation")
     
     producer = EpicsKafkaProducer()

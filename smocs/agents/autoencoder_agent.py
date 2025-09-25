@@ -13,9 +13,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
-from smocs.utils import ConfigLoader, extract_sensor_values
-
-logging.basicConfig(level=logging.INFO)
+from smocs.utils import ConfigLoader, ChannelFilter
 
 class AutoencoderDataIngestThread(DataIngestThreadBase):
     """
@@ -23,12 +21,12 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
     Stores raw time series sensor data to database.
     """
     
-    def store_message(self, message, topic, partition, offset) -> bool:
+    def store_message(self, message_data, topic, partition, offset) -> bool:
         """
         Parse sensor message and store raw data to database.
         
         Args:
-            message: JSON string with sensor readings
+            message_data: Already parsed and filtered message dict
             topic: Kafka topic name
             partition: Kafka partition
             offset: Kafka offset
@@ -37,23 +35,22 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
             bool: True if storage successful
         """
         try:
-            # Parse message
-            if isinstance(message, bytes):
-                message = message.decode('utf-8')
-            
-            data = json.loads(message)
-            
-            # Extract timestamp and sensor channels
-            if 'timestamp' in data:
-                timestamp = datetime.fromtimestamp(data['timestamp'])
+            # Extract timestamp
+            if 'timestamp' in message_data:
+                timestamp = datetime.fromtimestamp(message_data['timestamp'])
             else:
                 timestamp = datetime.now()
             
-            # Get sensor readings from channels
-            channels = data.get('channels', {})
-            state_keys, state_values = extract_sensor_values(channels, topic)
+            # Get filtered channels (already processed by base class)
+            channels = message_data.get('channels', {})
             
-            sensor_values = np.array(state_values, dtype=np.float32)
+            if not channels:
+                logging.error("AEDataIngestThread: No channels in filtered message data")
+                return False
+            
+            # Convert channel values directly to numpy array (maintains order)
+            channel_values = list(channels.values())
+            sensor_values = np.array(channel_values, dtype=np.float32)
             
             # Store in database using existing schema
             sensor_data = {
@@ -755,12 +752,12 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             logging.error(f"Exception details: {type(e).__name__}: {str(e)}")
             return {'error': str(e), 'status': 'error'}
 
-    def parse_inference_request(self, message, topic, partition, offset) -> Optional[Dict[str, Any]]:
+    def parse_inference_request(self, message_data, topic, partition, offset) -> Optional[Dict[str, Any]]:
         """
         Parse inference request from sensor message.
         
         Args:
-            message: Sensor data message
+            message_data: Already parsed and filtered message dict
             topic: Kafka topic
             partition: Kafka partition  
             offset: Kafka offset
@@ -769,21 +766,19 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             Parsed sensor data or None
         """
         try:
-            # Parse message
-            if isinstance(message, bytes):
-                message = message.decode('utf-8')
+            channels = message_data.get('channels', {})
             
-            data = json.loads(message)
+            if not channels:
+                logging.error("AEMLInferenceThread: No channels in filtered message data")
+                return None
             
-            channels = data.get('channels', {})            
-            state_keys, state_values = extract_sensor_values(channels, topic)
-
-            # Convert to numpy array for storage
-            sensor_values = np.array(state_values, dtype=np.float32)
+            # Convert channel values directly to numpy array (maintains order)
+            channel_values = list(channels.values())
+            sensor_values = np.array(channel_values, dtype=np.float32)
             
             return {
                 'sensor_values': sensor_values,
-                'timestamp': data.get('timestamp', time.time()),
+                'timestamp': message_data.get('timestamp', time.time()),
                 'channels': channels
             }
             
@@ -793,7 +788,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
 
     def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
         """
-        Process incoming message and return inference results in validated format.
+        Process incoming message with optional channel filtering and return inference results.
         
         Args:
             message: The message value
@@ -805,56 +800,65 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             Tuple[bool, List[Tuple]]: Success status and list of outputs to send
         """
         try:
-            # Parse inference request
-            inference_request = self.parse_inference_request(message, topic, partition, offset)
+            # Parse message
+            if isinstance(message, bytes):
+                message = message.decode('utf-8')
+            
+            message_data = json.loads(message)
+            
+            # Apply channel filtering or extract all channels
+            if self.channel_filter:
+                # Use configured channel filtering
+                filtered_result = self.channel_filter.filter_channels(message_data)
+                if filtered_result is None:
+                    logging.debug(f"MLInfernceThread: Skipping message from {topic}:{partition}:{offset} due to channel filtering")
+                    return True, []
+                
+                channel_names, channel_values = filtered_result
+            else:
+                # Extract all numeric channels when no filter configured
+                filtered_result = ChannelFilter.extract_all_channels(message_data)
+                if filtered_result is None:
+                    logging.debug(f"MLInfernceThread: Skipping message from {topic}:{partition}:{offset} - no valid channels")
+                    return True, []
+                
+                channel_names, channel_values = filtered_result
+            
+            # Create clean channel dictionary for agent processing
+            filtered_channels = dict(zip(channel_names, channel_values))
+            message_data['channels'] = filtered_channels
+            
+            logging.debug(f"MLInfernceThread: Extracted {len(channel_values)} channels for inference")
+            
+            # Parse inference request with processed data
+            inference_request = self.parse_inference_request(message_data, topic, partition, offset)
             
             if inference_request is None:
                 return False, []
             
-            # Perform inference
+            # Rest of inference logic remains the same...
             inference_result = self.perform_inference(inference_request)
             
             if inference_result is None:
                 return False, []
             
-            # Store inference result to database
             self._store_inference_result(inference_request, inference_result)
             
-            # Format result for Kafka in validated format
-            channels = {
-                'agent_id': self.agent_id,
-                'model_version': inference_result.get('model_version', 0),
-                'error_score': inference_result.get('error_score', 0.0),
-                'is_anomaly': inference_result.get('is_anomaly', False),
-                'anomaly_threshold': inference_result.get('anomaly_threshold', 0.0),
-                'buffer_size': inference_result.get('buffer_size', len(self.recent_data)),
-                'status': inference_result.get('status', 'unknown'),
-                'input_topic': topic
-            }
-            
-            # Add error information if present
-            if 'error' in inference_result:
-                channels['error'] = str(inference_result['error'])
-            
-            # Add reconstruction statistics if available
-            if 'reconstruction' in inference_result:
-                reconstruction = inference_result['reconstruction']
-                if isinstance(reconstruction, list) and reconstruction:
-                    channels['reconstruction_mean'] = float(np.mean(reconstruction))
-                    channels['reconstruction_std'] = float(np.std(reconstruction))
-                    channels['reconstruction_min'] = float(np.min(reconstruction))
-                    channels['reconstruction_max'] = float(np.max(reconstruction))
-            
             output_message = {
-                'timestamp': inference_result.get('timestamp', time.time()),
-                'channels': channels
+                'agent_id': self.agent_id,
+                'timestamp': time.time(),
+                'inference_result': inference_result,
+                'original_message': message
             }
             
             kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
             return True, [(kafka_topic, json.dumps(output_message))]
             
+        except json.JSONDecodeError as e:
+            logging.error(f"MLInfernceThread: JSON decode error for message from {topic}:{partition}:{offset}: {e}")
+            return False, []
         except Exception as e:
-            logging.error(f"AEMLInferenceThread: Error processing inference message: {e}")
+            logging.error(f"MLInfernceThread: Error processing inference message: {e}")
             return False, []
 
     def _store_inference_result(self, inference_request: Dict[str, Any], inference_result: Dict[str, Any]):

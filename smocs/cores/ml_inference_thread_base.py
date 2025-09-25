@@ -7,8 +7,7 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from smocs.cores import KafkaStreamingProcessBase
 from smocs.db.mysql_api_v0 import DBManager
-
-logging.basicConfig(level=logging.INFO)
+from smocs.utils import ChannelFilter
 
 class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
     """
@@ -27,6 +26,10 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
         self.agent_id = agent_id
         self.config = config
         
+        # Setup channel filter if configured
+        input_channels = config.get('model_input', {}).get('channels')
+        self.channel_filter = ChannelFilter(input_channels) if input_channels else None
+        
         # Setup Kafka streaming
         kafka_broker_url = os.environ.get('KAFKA_BROKER_URL', 'kafka-broker:9092')
         group_id = f"{agent_id}-ml-inference"
@@ -42,6 +45,9 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
         self.load_model()
         
         logging.info(f"MLInfernceThread: ML Inference Thread initialized for agent {agent_id}")
+        logging.info(f"MLInfernceThread: Channel filter: {'enabled' if self.channel_filter else 'disabled'}")
+        if self.channel_filter:
+            logging.info(f"MLInfernceThread: Required channels: {self.channel_filter.get_required_channels()}")
     
     def _setup_db_connection(self) -> DBManager:
         """Setup database connection for this thread."""
@@ -57,7 +63,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
     
     def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
         """
-        Process incoming message and return inference results.
+        Process incoming message with optional channel filtering and return inference results.
         
         Args:
             message: The message value
@@ -69,8 +75,27 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
             Tuple[bool, List[Tuple]]: Success status and list of outputs to send
         """
         try:
-            # Parse inference request
-            inference_request = self.parse_inference_request(message, topic, partition, offset)
+            # Parse message
+            if isinstance(message, bytes):
+                message = message.decode('utf-8')
+            
+            message_data = json.loads(message)
+            
+            # Apply channel filtering if configured
+            if self.channel_filter:
+                filtered_result = self.channel_filter.filter_channels(message_data)
+                if filtered_result is None:
+                    # Skip message due to missing/invalid channels
+                    logging.debug(f"MLInfernceThread: Skipping message from {topic}:{partition}:{offset} due to channel filtering")
+                    return True, []  # Continue processing but don't send outputs
+                
+                # Replace the channels in the message with filtered ones
+                channel_names, channel_values = filtered_result
+                message_data['channels'] = dict(zip(channel_names, channel_values))
+                logging.debug(f"MLInfernceThread: Applied channel filtering, extracted {len(channel_values)} channels")
+            
+            # Parse inference request with filtered data
+            inference_request = self.parse_inference_request(message_data, topic, partition, offset)
             
             if inference_request is None:
                 return False, []
@@ -95,6 +120,9 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
             kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
             return True, [(kafka_topic, json.dumps(output_message))]
             
+        except json.JSONDecodeError as e:
+            logging.error(f"MLInfernceThread: JSON decode error for message from {topic}:{partition}:{offset}: {e}")
+            return False, []
         except Exception as e:
             logging.error(f"MLInfernceThread: Error processing inference message: {e}")
             return False, []
