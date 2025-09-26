@@ -51,17 +51,20 @@ autoencoder_agent:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - state_0
-      - state_1
+      - IPM9A01.PHAS
+      - IPM9A02.XPOS
+      - IPM9A02.YPOS
       bounds:
-      - [-1.2, 0.6]
-      - [-0.07, 0.07]
+      - [-1, 1]
+      - [-1, 1]
+      - [-1, 1]
   model_output:
       channels:
-      - state_0
-      - state_1
+      - IPM9A01.PHAS
+      - IPM9A02.XPOS
+      - IPM9A02.YPOS
   kafka_topics:
-    input: "gymnasium-output"
+    input: "CEBAF"
     output: "autoencoder-anomalies"
     training_output: "autoencoder-training-results"
 
