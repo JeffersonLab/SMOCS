@@ -26,7 +26,7 @@ epics:
       - IPM9A02.PHAS
 
 gymnasium:
-  environment: "HalfCheetah-v4"
+  environment: "MountainCarContinuous-v0"
   input_topic: "gymnasium-action"
   output_topic: "gymnasium-output"
   blocking_mode: false
@@ -51,20 +51,17 @@ autoencoder_agent:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - IPM9A01.PHAS
-      - IPM9A02.XPOS
-      - IPM9A02.YPOS
+      - state_0
+      - state_1
       bounds:
-      - [-1, 1]
-      - [-1, 1]
-      - [-1, 1]
+      - [-1.2, 0.6]
+      - [-0.07, 0.07]
   model_output:
       channels:
-      - IPM9A01.PHAS
-      - IPM9A02.XPOS
-      - IPM9A02.YPOS
+      - state_0
+      - state_1
   kafka_topics:
-    input: "CEBAF"
+    input: "gymnasium-output"
     output: "autoencoder-anomalies"
     training_output: "autoencoder-training-results"
 
