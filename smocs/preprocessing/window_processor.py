@@ -35,19 +35,19 @@ class WindowProcessor(BasePreprocessor):
         """
         try:
             # Add debug logging
-            logging.info(f"WindowProcessor: Input data type: {type(data)}")
+            logging.debug(f"WindowProcessor: Input data type: {type(data)}")
             if isinstance(data, (list, tuple)):
-                logging.info(f"WindowProcessor: List/tuple length: {len(data)}")
+                logging.debug(f"WindowProcessor: List/tuple length: {len(data)}")
                 if len(data) > 0:
-                    logging.info(f"WindowProcessor: First element type: {type(data[0])}")
+                    logging.debug(f"WindowProcessor: First element type: {type(data[0])}")
                     if isinstance(data[0], (list, tuple)):
-                        logging.info(f"WindowProcessor: First sequence length: {len(data[0])}")
+                        logging.debug(f"WindowProcessor: First sequence length: {len(data[0])}")
                         if len(data[0]) > 0:
-                            logging.info(f"WindowProcessor: First state type: {type(data[0][0])}")
-                            logging.info(f"WindowProcessor: First state: {data[0][0]}")
+                            logging.debug(f"WindowProcessor: First state type: {type(data[0][0])}")
+                            logging.debug(f"WindowProcessor: First state: {data[0][0]}")
             elif isinstance(data, np.ndarray):
-                logging.info(f"WindowProcessor: Array shape: {data.shape}")
-                logging.info(f"WindowProcessor: Array dtype: {data.dtype}")
+                logging.debug(f"WindowProcessor: Array shape: {data.shape}")
+                logging.debug(f"WindowProcessor: Array dtype: {data.dtype}")
             
             # Handle different input formats
             if isinstance(data, list):
@@ -72,7 +72,7 @@ class WindowProcessor(BasePreprocessor):
             # Create final windowed array
             windowed_array = np.array(processed_sequences, dtype=np.float32)
             
-            logging.info(f"WindowProcessor: Created {len(windowed_array)} windows of size {windowed_array.shape[1]}")
+            logging.debug(f"WindowProcessor: Created {len(windowed_array)} windows of size {windowed_array.shape[1]}")
             
             return windowed_array
             
@@ -109,7 +109,7 @@ class WindowProcessor(BasePreprocessor):
                 logging.warning(f"WindowProcessor: Error flattening sequence {seq_idx}: {flatten_error}")
                 continue
         
-        logging.info(f"WindowProcessor: Processed {len(valid_windows)} valid windows from {n_sequences} 3D sequences")
+        logging.debug(f"WindowProcessor: Processed {len(valid_windows)} valid windows from {n_sequences} 3D sequences")
         return valid_windows
     
     def _process_sequence_list(self, sequences: List) -> List[np.ndarray]:
@@ -117,7 +117,7 @@ class WindowProcessor(BasePreprocessor):
         valid_windows = []
         expected_state_length = None
         
-        logging.info(f"WindowProcessor: Processing {len(sequences)} sequences, expected window_size: {self.window_size}")
+        logging.debug(f"WindowProcessor: Processing {len(sequences)} sequences, expected window_size: {self.window_size}")
         
         for seq_idx, sequence in enumerate(sequences):
             # Each sequence should already be exactly window_size length from database
@@ -187,7 +187,7 @@ class WindowProcessor(BasePreprocessor):
                     logging.warning(f"WindowProcessor: Error concatenating sequence {seq_idx}: {concat_error}")
                     continue
         
-        logging.info(f"WindowProcessor: Created {len(valid_windows)} valid windows from {len(sequences)} sequences")
+        logging.debug(f"WindowProcessor: Created {len(valid_windows)} valid windows from {len(sequences)} sequences")
         
         return valid_windows
     
