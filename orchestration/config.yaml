@@ -54,6 +54,10 @@ autoencoder_agent:
       - IPM9A01.PHAS
       - IPM9A02.XPOS
       - IPM9A02.YPOS
+      bounds:
+      - [-1, 1]
+      - [-1, 1]
+      - [-1, 1]
   model_output:
       channels:
       - IPM9A01.PHAS
