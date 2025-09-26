@@ -433,7 +433,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             os.rename(latest_tmp, latest_file)
             logging.info("AEMLTrainingThread: Atomic renames completed")
             
-            logging.info(f"AEMLTrainingThread: Model v{version_str} saved successfully as latest (val_loss: {eval_results.get('val_loss', 'N/A')})")
+            logging.info(f"AEMLTrainingThread: Model v{version_str} saved successfully as latest")
                 
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error saving model: {e}")
