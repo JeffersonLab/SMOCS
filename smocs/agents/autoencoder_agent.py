@@ -675,10 +675,15 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             self._store_inference_result(inference_request, inference_result)
             
             output_message = {
-                'agent_id': self.agent_id,
                 'timestamp': time.time(),
-                'inference_result': inference_result,
-                'original_message': message
+                'channels': {
+                    'agent_id': self.agent_id,
+                    'error_score': inference_result.get('error_score', 0.0),
+                    'is_anomaly': inference_result.get('is_anomaly', False),
+                    'anomaly_threshold': inference_result.get('anomaly_threshold', 0.0),
+                    'model_version': inference_result.get('model_version', 0),
+                    'status': inference_result.get('status', 'unknown')
+                }
             }
             
             kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
@@ -706,17 +711,16 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
             # Convert timestamp to proper format if needed
             if isinstance(source_timestamp, (int, float)):
-                # Convert Unix timestamp to datetime string
                 timestamp_dt = datetime.fromtimestamp(source_timestamp)
                 source_timestamp_str = timestamp_dt.strftime('%Y-%m-%d %H:%M:%S.%f')
             else:
                 source_timestamp_str = str(source_timestamp)
             
             # Create prediction array from inference result
-            # The reconstruction represents the model's prediction
-            reconstruction = inference_result.get('reconstruction')
+            # Use reconstruction_normalized for storage (consistent with training data)
+            reconstruction = inference_result.get('reconstruction_normalized')
             if reconstruction is None:
-                logging.warning("AEMLInferenceThread: No reconstruction in inference result, cannot store prediction")
+                logging.warning("AEMLInferenceThread: No reconstruction_normalized in inference result, cannot store prediction")
                 return
             
             # Convert reconstruction to numpy array
@@ -732,7 +736,6 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             prediction_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
             
             # Use record_prediction to store the inference result
-            # This will update the existing agent_inferences record with the prediction
             status = self.db_manager.record_prediction(
                 prediction=prediction_array,
                 prediction_timestamp=prediction_timestamp,
@@ -741,13 +744,12 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             )
             
             if status == 0:
-                logging.info(f"AEMLInferenceThread: Successfully stored inference result for timestamp {source_timestamp_str}")
+                logging.debug(f"AEMLInferenceThread: Successfully stored inference result for timestamp {source_timestamp_str}")
             else:
                 logging.error(f"AEMLInferenceThread: Failed to store inference result, status: {status}")
             
         except Exception as e:
             logging.error(f"AEMLInferenceThread: Error storing inference result: {e}")
-            logging.error(f"AEMLInferenceThread: Exception details: {type(e).__name__}: {str(e)}")
 
 class AutoencoderAgent(AgentBase):
     """
