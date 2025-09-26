@@ -43,7 +43,7 @@ kafka:
 
 autoencoder_agent:
   window_size: 3
-  min_training_samples: 500
+  min_training_samples: 150
   encoder_dims: [32, 16]
   learning_rate: 0.001
   batch_size: 4

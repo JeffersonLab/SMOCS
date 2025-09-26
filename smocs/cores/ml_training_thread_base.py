@@ -72,27 +72,48 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
         """
         Main training loop that continuously checks for new data and trains models.
         """
+        logging.info("MLTrainingThread: Starting training loop...")
+        
         while self.running:
             try:
+                logging.debug("MLTrainingThread: Checking for training data...")
+                
                 # Get training data from database
                 training_data = self.get_training_data()
                 
                 if training_data is not None:
+                    logging.info(f"MLTrainingThread: Found training data with shape {training_data.shape}")
+                    
                     # Train model with training data
+                    logging.info("MLTrainingThread: Starting model training...")
                     model_metrics = self.train_model(training_data)
+                    logging.info(f"MLTrainingThread: Training completed with metrics: {model_metrics}")
                     
                     # Evaluate model
+                    logging.info("MLTrainingThread: Starting model evaluation...")
                     eval_results = self.eval_model()
+                    logging.info(f"MLTrainingThread: Evaluation completed: {eval_results}")
                     
                     # Save model to database
+                    logging.info("MLTrainingThread: Saving model...")
                     self.save_model(model_metrics, eval_results)
                     
                     # Send training results to Kafka
+                    logging.info("MLTrainingThread: Sending training results to Kafka...")
                     self._send_training_results(model_metrics, eval_results)
-                
+                    
+                    # Sleep after successful training to avoid continuous training
+                    logging.info("MLTrainingThread: Training cycle completed, sleeping...")
+                    time.sleep(60)  # Wait 1 minute before next training cycle
+                    
+                else:
+                    logging.debug("MLTrainingThread: No training data available, waiting...")
+                    time.sleep(30)  # Wait 30 seconds before checking again
+                    
             except Exception as e:
                 logging.error(f"MLTrainingThread: Error in training loop: {e}")
-                time.sleep(1)
+                logging.error(f"MLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
+                time.sleep(5)  # Wait 5 seconds before retrying on error
     
     def _send_training_results(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
         """Send training results to Kafka."""

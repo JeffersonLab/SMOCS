@@ -21,17 +21,11 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
     Data ingestion thread for autoencoder agent.
     Stores raw time series sensor data to database.
     """
-
-    def __init__(self, agent_id: str, config: Dict[str, Any]):
-        super().__init__(agent_id, config)
-        
-        # Create preprocessing manager
-        self.preprocessing_manager = PreprocessingManager(config)
-        self.bounds_normalizer = self.preprocessing_manager.get_processor('bounds_normalizer')
     
     def store_message(self, message_data, topic, partition, offset) -> bool:
         """
-        Parse sensor message, normalize, and store normalized data to database.
+        Parse sensor message and store raw data to database.
+        No preprocessing here - just store raw sensor values.
         """
         try:
             # Extract timestamp
@@ -51,25 +45,17 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
             channel_values = list(channels.values())
             sensor_values = np.array(channel_values, dtype=np.float32)
             
-            # Normalize the sensor values before storing
-            try:
-                normalized_values = self.bounds_normalizer.process(sensor_values)
-                logging.debug(f"AEDataIngestThread: Normalized {len(sensor_values)} channels")
-            except Exception as norm_error:
-                logging.error(f"AEDataIngestThread: Normalization failed: {norm_error}")
-                return False
-            
-            # Store normalized data in database
+            # Store RAW data in database (no preprocessing here)
             sensor_data = {
                 'state_source_timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S.%f'),
                 'state_received_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-                'state': normalized_values  # Store normalized data
+                'state': sensor_values  # Raw data - preprocessing happens during training
             }
             
             status = self.db_manager.record_sensor_data(sensor_data)
             
             if status == 0:
-                logging.debug(f"AEDataIngestThread: Stored normalized sensor data: {len(normalized_values)} channels at {timestamp}")
+                logging.debug(f"AEDataIngestThread: Stored raw sensor data: {len(sensor_values)} channels at {timestamp}")
                 return True
             else:
                 logging.error(f"AEDataIngestThread: Failed to store sensor data, status: {status}")
@@ -155,12 +141,13 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
     
     def get_training_data(self) -> Optional[np.ndarray]:
         """
-        Retrieve and preprocess training data from database.
-        Data is already normalized from ingestion, just need to create windows.
+        Retrieve raw training data from database and apply preprocessing pipeline.
         """
         try:
             # Check if enough data available
             total_samples = self.db_manager.get_size("agent_inferences")
+            
+            logging.info(f"AEMLTrainingThread: Database contains {total_samples} samples (need {self.min_training_samples})")
             
             if total_samples < self.min_training_samples:
                 logging.debug(f"AEMLTrainingThread: Not enough samples for training: {total_samples} < {self.min_training_samples}")
@@ -171,7 +158,9 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 logging.debug("AEMLTrainingThread: No new data since last training")
                 return None
             
-            # Get recent sensor data from database - data is already normalized
+            logging.info(f"AEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
+            
+            # Get recent sensor data from database - data is RAW (not preprocessed)
             batch_data = self.db_manager.sample_batch(
                 batch_size=self.batch_size*100, 
                 segment_length=self.window_size,
@@ -179,43 +168,101 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 mode="latest"
             )
             
-            logging.info(f"sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
+            logging.info(f"AEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
             
             if batch_data is None or len(batch_data['state']) == 0:
                 logging.warning("AEMLTrainingThread: No batch data returned from database")
                 return None
             
-            # Create windows from already-normalized data
+            # Step 1: Normalize each individual state using bounds normalizer
+            logging.info("AEMLTrainingThread: Starting preprocessing pipeline...")
+            normalized_sequences = []
+            
+            for seq_idx, sequence in enumerate(batch_data['state']):
+                if len(sequence) != self.window_size:
+                    logging.debug(f"AEMLTrainingThread: Skipping sequence {seq_idx} with wrong length {len(sequence)}")
+                    continue
+                
+                normalized_sequence = []
+                sequence_valid = True
+                
+                for state_idx, raw_state in enumerate(sequence):
+                    try:
+                        # Convert to consistent numpy format
+                        if isinstance(raw_state, np.ndarray):
+                            state_array = raw_state.flatten().astype(np.float32)
+                        elif isinstance(raw_state, (list, tuple)):
+                            state_array = np.array(raw_state, dtype=np.float32).flatten()
+                        elif isinstance(raw_state, (int, float)):
+                            state_array = np.array([float(raw_state)], dtype=np.float32)
+                        else:
+                            logging.warning(f"AEMLTrainingThread: Unknown state type at sequence {seq_idx}, state {state_idx}: {type(raw_state)}")
+                            sequence_valid = False
+                            break
+                        
+                        # Validate numeric values
+                        if np.any(np.isnan(state_array)) or np.any(np.isinf(state_array)):
+                            logging.warning(f"AEMLTrainingThread: Invalid values (NaN/Inf) at sequence {seq_idx}, state {state_idx}")
+                            sequence_valid = False
+                            break
+                        
+                        # Apply bounds normalization to this state
+                        normalized_state = self.bounds_normalizer.process(state_array)
+                        normalized_sequence.append(normalized_state)
+                        
+                    except Exception as norm_error:
+                        logging.warning(f"AEMLTrainingThread: Normalization failed for sequence {seq_idx}, state {state_idx}: {norm_error}")
+                        sequence_valid = False
+                        break
+                
+                # Add valid normalized sequences
+                if sequence_valid and len(normalized_sequence) == self.window_size:
+                    normalized_sequences.append(normalized_sequence)
+            
+            logging.info(f"AEMLTrainingThread: Normalized {len(normalized_sequences)} sequences")
+            
+            if not normalized_sequences:
+                logging.error("AEMLTrainingThread: No valid sequences after normalization")
+                return None
+            
+            # Step 2: Apply window processing to create training windows
             try:
-                windowed_array = self.window_processor.process(batch_data['state'])
+                windowed_array = self.window_processor.process(normalized_sequences)
                 
                 if windowed_array is None or len(windowed_array) == 0:
-                    logging.error("AEMLTrainingThread: No valid windows created")
+                    logging.error("AEMLTrainingThread: No valid windows created by window processor")
                     return None
                     
             except Exception as window_error:
                 logging.error(f"AEMLTrainingThread: Window processing failed: {window_error}")
+                # Debug the data format
+                logging.error(f"AEMLTrainingThread: Data passed to window processor: {len(normalized_sequences)} sequences")
+                if len(normalized_sequences) > 0:
+                    logging.error(f"AEMLTrainingThread: First sequence length: {len(normalized_sequences[0])}")
+                    logging.error(f"AEMLTrainingThread: First state shape: {normalized_sequences[0][0].shape}")
                 return None
             
             # Log final statistics
-            logging.debug(f"Training data shape: {windowed_array.shape}")
-            logging.debug(f"Training data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
-            logging.debug(f"Training data mean: {np.mean(windowed_array):.6f}")
-            logging.debug(f"Training data std: {np.std(windowed_array):.6f}")
+            logging.info(f"AEMLTrainingThread: Final windowed data shape: {windowed_array.shape}")
+            logging.debug(f"AEMLTrainingThread: Data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
+            logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(windowed_array):.6f}")
+            logging.debug(f"AEMLTrainingThread: Data std: {np.std(windowed_array):.6f}")
             
             # Update training count
             self.last_training_count = total_samples
             
-            logging.info(f"AEMLTrainingThread: Successfully prepared {len(windowed_array)} training windows from {total_samples} total samples")
+            logging.info(f"AEMLTrainingThread: Successfully prepared {len(windowed_array)} training windows using preprocessing pipeline")
             return windowed_array
             
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
+            logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
             return None
     
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
         """
-        Train the autoencoder model on already-normalized data.
+        Train the autoencoder model on preprocessed data.
+        Data is already normalized by the preprocessing pipeline.
         """
         try:
             # Build model if not exists
@@ -223,15 +270,17 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 input_dim = training_data.shape[1]
                 self._create_autoencoder(input_dim)
             
+            logging.info(f"AEMLTrainingThread: Training with preprocessed data shape: {training_data.shape}")
+            
             # Train autoencoder (input = output for reconstruction)
-            # Data is already normalized from ingestion
+            # Data is already normalized by preprocessing pipeline
             history = self.model.fit(
                 training_data,
                 training_data,  # Autoencoder learns to reconstruct input
                 batch_size=self.batch_size,
                 epochs=self.epochs,
                 validation_split=0.2,
-                verbose=0
+                verbose=1  # Show training progress
             )
             
             # Extract training metrics
@@ -251,6 +300,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error training model: {e}")
+            logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}")
             return {'error': str(e)}
     
     def eval_model(self) -> Dict[str, Any]:
@@ -319,9 +369,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 logging.error("AEMLTrainingThread: No model to save")
                 return
             
+            logging.info("AEMLTrainingThread: Starting model save process...")
+            
             # Create models directory
             models_dir = "/app/models"
             os.makedirs(models_dir, exist_ok=True)
+            logging.info(f"AEMLTrainingThread: Models directory created/confirmed: {models_dir}")
             
             # Find next version number
             existing_models = glob.glob(f"{models_dir}/model_v*.h5")
@@ -335,12 +388,16 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             model_file = f"{models_dir}/model_v{version_str}.h5"
             latest_file = f"{models_dir}/latest_model.json"
             
+            logging.info(f"AEMLTrainingThread: Saving model version {next_version}")
+            
             # Use temporary files for atomic writes
             model_tmp = f"{model_file}.tmp"
             latest_tmp = f"{latest_file}.tmp"
             
             # Save model to temporary file
+            logging.info("AEMLTrainingThread: Saving TensorFlow model...")
             self.model.save(model_tmp)
+            logging.info("AEMLTrainingThread: TensorFlow model saved to temporary file")
             
             # Prepare metadata (normalization info stored in bounds normalizer config)
             metadata = {
@@ -358,22 +415,33 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 'normalization_note': 'Data normalized at ingestion using bounds from config'
             }
             
-            # Always save as latest model
+            # Save metadata to temporary file
+            logging.info("AEMLTrainingThread: Saving metadata...")
             with open(latest_tmp, 'w') as f:
                 json.dump(metadata, f, indent=2)
+            logging.info("AEMLTrainingThread: Metadata saved to temporary file")
             
             # Atomic renames
+            logging.info("AEMLTrainingThread: Performing atomic file renames...")
             os.rename(model_tmp, model_file)
             os.rename(latest_tmp, latest_file)
+            logging.info("AEMLTrainingThread: Atomic renames completed")
             
-            logging.info(f"AEMLTrainingThread: Model v{version_str} saved as latest (val_loss: {eval_results.get('val_loss', 'N/A')})")
+            logging.info(f"AEMLTrainingThread: Model v{version_str} saved successfully as latest (val_loss: {eval_results.get('val_loss', 'N/A')})")
                 
         except Exception as e:
-            # Clean up temporary files
-            for tmp_file in [model_tmp, latest_tmp]:
-                if 'tmp_file' in locals() and os.path.exists(tmp_file):
-                    os.remove(tmp_file)
             logging.error(f"AEMLTrainingThread: Error saving model: {e}")
+            logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
+            
+            # Clean up temporary files - FIXED BUG
+            temp_files = [model_tmp, latest_tmp] if 'model_tmp' in locals() and 'latest_tmp' in locals() else []
+            for tmp_file in temp_files:
+                if os.path.exists(tmp_file):
+                    try:
+                        os.remove(tmp_file)
+                        logging.info(f"AEMLTrainingThread: Cleaned up temporary file: {tmp_file}")
+                    except Exception as cleanup_error:
+                        logging.error(f"AEMLTrainingThread: Error cleaning up {tmp_file}: {cleanup_error}")
     
     def _send_training_results(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
         """
@@ -494,7 +562,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
 
     def perform_inference(self, inference_request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Perform anomaly detection inference with normalization/denormalization.
+        Perform anomaly detection inference using preprocessing pipeline.
         """
         try:
             # Check for model updates periodically
@@ -503,12 +571,21 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             if self.model is None:
                 self.load_model()
                 if self.model is None:
-                    logging.warning("AEMLInferenceThread: No model available for inference")
-                    return None
+                    logging.debug("AEMLInferenceThread: No model available for inference")
+                    return {
+                        'reconstruction_normalized': np.array([]),
+                        'reconstruction_original': np.array([]),
+                        'error_score': 0.0,
+                        'is_anomaly': False,
+                        'anomaly_threshold': 0.0,
+                        'model_version': 0,
+                        'timestamp': inference_request['timestamp'],
+                        'status': 'model_not_ready'
+                    }
             
             sensor_values = inference_request['sensor_values']
             
-            # Normalize sensor values to match training data
+            # Normalize sensor values using bounds normalizer
             try:
                 normalized_values = self.bounds_normalizer.process(sensor_values)
             except Exception as norm_error:
@@ -525,15 +602,16 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Need at least window_size samples for inference
             if len(self.recent_data) < self.window_size:
                 return {
-                    'reconstruction_normalized': normalized_values.tolist(),
-                    'reconstruction_original': sensor_values.tolist(),
+                    'reconstruction_normalized': normalized_values,
+                    'reconstruction_original': sensor_values,
                     'error_score': 0.0,
                     'is_anomaly': False,
                     'status': 'insufficient_data',
-                    'buffer_size': len(self.recent_data)
+                    'buffer_size': len(self.recent_data),
+                    'timestamp': inference_request['timestamp']
                 }
             
-            # Create inference window from normalized data
+            # Create inference window from normalized data using window processor
             try:
                 window_data = self.window_processor.process([self.recent_data[-self.window_size:]])
                 if len(window_data) == 0:
@@ -545,7 +623,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 logging.error(f"AEMLInferenceThread: Window creation failed: {window_error}")
                 return {'error': str(window_error), 'status': 'error'}
             
-            # Get reconstruction from model (operates on normalized data)
+            # Get reconstruction from model (operates on preprocessed data)
             reconstruction_normalized = self.model.predict(flattened_window, verbose=0)
             
             # Denormalize reconstruction to original units
@@ -562,9 +640,9 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             is_anomaly = error_score > self.anomaly_threshold if self.anomaly_threshold else False
             
             result = {
-                'reconstruction_normalized': reconstruction_normalized.flatten().tolist(),
-                'reconstruction_original': reconstruction_original.flatten().tolist(),
-                'original_window_normalized': flattened_window.flatten().tolist(),
+                'reconstruction_normalized': reconstruction_normalized.flatten(),
+                'reconstruction_original': reconstruction_original.flatten(),
+                'original_window_normalized': flattened_window.flatten(),
                 'error_score': error_score,
                 'is_anomaly': is_anomaly,
                 'anomaly_threshold': self.anomaly_threshold,
