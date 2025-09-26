@@ -104,10 +104,10 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
                     
                     # Sleep after successful training to avoid continuous training
                     logging.info("MLTrainingThread: Training cycle completed, sleeping...")
-                    time.sleep(60)  # Wait 1 minute before next training cycle
+                    time.sleep(30)  # Wait 30 seconds before next training cycle
                     
                 else:
-                    logging.debug("MLTrainingThread: No training data available, waiting...")
+                    logging.info("MLTrainingThread: Training data unavailable, waiting...")
                     time.sleep(30)  # Wait 30 seconds before checking again
                     
             except Exception as e:

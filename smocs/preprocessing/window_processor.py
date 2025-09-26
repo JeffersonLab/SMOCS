@@ -34,6 +34,21 @@ class WindowProcessor(BasePreprocessor):
             Windowed data of shape (n_windows, window_size * n_features)
         """
         try:
+            # Add debug logging
+            logging.info(f"WindowProcessor: Input data type: {type(data)}")
+            if isinstance(data, (list, tuple)):
+                logging.info(f"WindowProcessor: List/tuple length: {len(data)}")
+                if len(data) > 0:
+                    logging.info(f"WindowProcessor: First element type: {type(data[0])}")
+                    if isinstance(data[0], (list, tuple)):
+                        logging.info(f"WindowProcessor: First sequence length: {len(data[0])}")
+                        if len(data[0]) > 0:
+                            logging.info(f"WindowProcessor: First state type: {type(data[0][0])}")
+                            logging.info(f"WindowProcessor: First state: {data[0][0]}")
+            elif isinstance(data, np.ndarray):
+                logging.info(f"WindowProcessor: Array shape: {data.shape}")
+                logging.info(f"WindowProcessor: Array dtype: {data.dtype}")
+            
             # Handle different input formats
             if isinstance(data, list):
                 # Convert list of states to array format (original logic)
@@ -51,12 +66,13 @@ class WindowProcessor(BasePreprocessor):
                 raise ValueError(f"WindowProcessor: Unsupported data type: {type(data)}")
             
             if len(processed_sequences) == 0:
+                logging.error("WindowProcessor: No valid sequences found after processing")
                 raise ValueError("WindowProcessor: No valid sequences found after processing")
             
             # Create final windowed array
             windowed_array = np.array(processed_sequences, dtype=np.float32)
             
-            logging.debug(f"WindowProcessor: Created {len(windowed_array)} windows of size {windowed_array.shape[1]}")
+            logging.info(f"WindowProcessor: Created {len(windowed_array)} windows of size {windowed_array.shape[1]}")
             
             return windowed_array
             
@@ -101,7 +117,10 @@ class WindowProcessor(BasePreprocessor):
         valid_windows = []
         expected_state_length = None
         
+        logging.info(f"WindowProcessor: Processing {len(sequences)} sequences, expected window_size: {self.window_size}")
+        
         for seq_idx, sequence in enumerate(sequences):
+            # Each sequence should already be exactly window_size length from database
             if len(sequence) != self.window_size:
                 logging.debug(f"WindowProcessor: Skipping sequence {seq_idx} with length {len(sequence)}, expected {self.window_size}")
                 continue
@@ -112,7 +131,7 @@ class WindowProcessor(BasePreprocessor):
             
             for state_idx, state in enumerate(sequence):
                 try:
-                    # Convert to numpy array and flatten
+                    # States should already be normalized numpy arrays from preprocessing
                     if isinstance(state, np.ndarray):
                         if state.size == 0:
                             logging.warning(f"WindowProcessor: Empty state array at sequence {seq_idx}, state {state_idx}")
@@ -133,17 +152,18 @@ class WindowProcessor(BasePreprocessor):
                         sequence_valid = False
                         break
                     
-                    # Validate values
+                    # Validate values - should be clean from normalization
                     if np.any(np.isnan(state_flat)) or np.any(np.isinf(state_flat)):
                         logging.warning(f"WindowProcessor: Invalid values (NaN/Inf) at sequence {seq_idx}, state {state_idx}")
                         sequence_valid = False
                         break
                     
-                    # Check length consistency
+                    # Check state length consistency
                     if expected_state_length is None:
                         expected_state_length = len(state_flat)
+                        logging.debug(f"WindowProcessor: Expected state length set to {expected_state_length}")
                     elif len(state_flat) != expected_state_length:
-                        logging.warning(f"WindowProcessor: Inconsistent state length at sequence {seq_idx}, state {state_idx}: expected {expected_state_length}, got {len(state_flat)}")
+                        logging.warning(f"WindowProcessor: Sequence {seq_idx}, state {state_idx} has length {len(state_flat)}, expected {expected_state_length}")
                         sequence_valid = False
                         break
                     
@@ -154,10 +174,20 @@ class WindowProcessor(BasePreprocessor):
                     sequence_valid = False
                     break
             
-            # Add valid windows
+            # Add valid windows - flatten the entire sequence into one window
             if sequence_valid and len(processed_states) == self.window_size:
-                window = np.concatenate(processed_states)
-                valid_windows.append(window)
+                try:
+                    window = np.concatenate(processed_states)
+                    valid_windows.append(window)
+                    
+                    if seq_idx < 3:  # Debug first few windows
+                        logging.debug(f"WindowProcessor: Created window {seq_idx} with shape {window.shape}")
+                        
+                except Exception as concat_error:
+                    logging.warning(f"WindowProcessor: Error concatenating sequence {seq_idx}: {concat_error}")
+                    continue
+        
+        logging.info(f"WindowProcessor: Created {len(valid_windows)} valid windows from {len(sequences)} sequences")
         
         return valid_windows
     

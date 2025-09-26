@@ -94,7 +94,7 @@ class InfluxDBConsumer(KafkaConsumerBase):
             
             # # Write to InfluxDB
             self.write_api.write(bucket=self.influxdb_bucket, org=self.influxdb_org, record=point)
-            logging.info(f"Successfully wrote data to InfluxDB bucket: {self.influxdb_bucket}")
+            logging.info(f"Successfully wrote {topic} with data {parsed_data} to InfluxDB bucket: {self.influxdb_bucket}")
             
             return True
             
@@ -137,7 +137,6 @@ class InfluxDBConsumer(KafkaConsumerBase):
             logging.error(f"Error parsing message data: {e}")
             return None
 
-    
     def create_influx_point(self, message, topic):
         """
         Create an InfluxDB point from message data using channel filtering.

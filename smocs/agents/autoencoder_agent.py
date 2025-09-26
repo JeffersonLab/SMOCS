@@ -13,7 +13,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
-from smocs.utils import ConfigLoader, ChannelFilter
+from smocs.utils import ConfigLoader, ChannelFilter, setup_logging
 from smocs.preprocessing import PreprocessingManager
 
 class AutoencoderDataIngestThread(DataIngestThreadBase):
@@ -137,7 +137,6 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.input_dim = input_dim
         
         logging.info(f"AEMLTrainingThread: Built autoencoder: input_dim={input_dim}, encoder_dims={self.encoder_dims}")
-        logging.info(f"AEMLTrainingThread: Model summary: {autoencoder.summary()}")
     
     def get_training_data(self) -> Optional[np.ndarray]:
         """
@@ -145,7 +144,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         """
         try:
             # Check if enough data available
-            total_samples = self.db_manager.get_size("agent_inferences")
+            total_samples = self.db_manager.get_size("agent_inferences") 
             
             logging.info(f"AEMLTrainingThread: Database contains {total_samples} samples (need {self.min_training_samples})")
             
@@ -160,10 +159,10 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             
             logging.info(f"AEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
             
-            # Get recent sensor data from database - data is RAW (not preprocessed)
+            # Get consecutive sequences from database using window_size as segment_length
             batch_data = self.db_manager.sample_batch(
-                batch_size=self.batch_size*100, 
-                segment_length=self.window_size,
+                batch_size=self.batch_size*10,  # Get multiple sequences 
+                segment_length=self.window_size,  # Each sequence should be window_size long
                 agent_type="diagnostics",
                 mode="latest"
             )
@@ -174,15 +173,16 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 logging.warning("AEMLTrainingThread: No batch data returned from database")
                 return None
             
-            # Step 1: Normalize each individual state using bounds normalizer
+            # Process each sequence through preprocessing pipeline
             logging.info("AEMLTrainingThread: Starting preprocessing pipeline...")
-            normalized_sequences = []
+            processed_sequences = []
             
             for seq_idx, sequence in enumerate(batch_data['state']):
                 if len(sequence) != self.window_size:
                     logging.debug(f"AEMLTrainingThread: Skipping sequence {seq_idx} with wrong length {len(sequence)}")
                     continue
                 
+                # Step 1: Normalize each state in the sequence individually
                 normalized_sequence = []
                 sequence_valid = True
                 
@@ -217,17 +217,18 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 
                 # Add valid normalized sequences
                 if sequence_valid and len(normalized_sequence) == self.window_size:
-                    normalized_sequences.append(normalized_sequence)
+                    processed_sequences.append(normalized_sequence)
             
-            logging.info(f"AEMLTrainingThread: Normalized {len(normalized_sequences)} sequences")
+            logging.info(f"AEMLTrainingThread: Normalized {len(processed_sequences)} sequences")
             
-            if not normalized_sequences:
+            if not processed_sequences:
                 logging.error("AEMLTrainingThread: No valid sequences after normalization")
                 return None
             
             # Step 2: Apply window processing to create training windows
+            # The window processor expects sequences that are already the right length
             try:
-                windowed_array = self.window_processor.process(normalized_sequences)
+                windowed_array = self.window_processor.process(processed_sequences)
                 
                 if windowed_array is None or len(windowed_array) == 0:
                     logging.error("AEMLTrainingThread: No valid windows created by window processor")
@@ -236,10 +237,10 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             except Exception as window_error:
                 logging.error(f"AEMLTrainingThread: Window processing failed: {window_error}")
                 # Debug the data format
-                logging.error(f"AEMLTrainingThread: Data passed to window processor: {len(normalized_sequences)} sequences")
-                if len(normalized_sequences) > 0:
-                    logging.error(f"AEMLTrainingThread: First sequence length: {len(normalized_sequences[0])}")
-                    logging.error(f"AEMLTrainingThread: First state shape: {normalized_sequences[0][0].shape}")
+                logging.error(f"AEMLTrainingThread: Data passed to window processor: {len(processed_sequences)} sequences")
+                if len(processed_sequences) > 0:
+                    logging.error(f"AEMLTrainingThread: First sequence length: {len(processed_sequences[0])}")
+                    logging.error(f"AEMLTrainingThread: First state shape: {processed_sequences[0][0].shape}")
                 return None
             
             # Log final statistics
@@ -258,7 +259,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
             logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
             return None
-    
+
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
         """
         Train the autoencoder model on preprocessed data.
@@ -271,17 +272,22 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 self._create_autoencoder(input_dim)
             
             logging.info(f"AEMLTrainingThread: Training with preprocessed data shape: {training_data.shape}")
-            
-            # Train autoencoder (input = output for reconstruction)
-            # Data is already normalized by preprocessing pipeline
+            logging.info(f"AEMLTrainingThread: Training starting")
+           
+            # Train autoencoder
+            # Data is already normalized by preprocessing pipeline, so no additional normalization
             history = self.model.fit(
                 training_data,
-                training_data,  # Autoencoder learns to reconstruct input
+                training_data,
                 batch_size=self.batch_size,
                 epochs=self.epochs,
                 validation_split=0.2,
-                verbose=1  # Show training progress
+                verbose=0  # Do not set to verbose or it TF will take lock on stdout and not let logging information print in container
             )
+
+            setup_logging()
+
+            logging.info(f"AEMLTrainingThread: Training complete")
             
             # Extract training metrics
             final_loss = history.history['loss'][-1]
@@ -572,48 +578,37 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 self.load_model()
                 if self.model is None:
                     logging.debug("AEMLInferenceThread: No model available for inference")
-                    return {
-                        'reconstruction_normalized': np.array([]),
-                        'reconstruction_original': np.array([]),
-                        'error_score': 0.0,
-                        'is_anomaly': False,
-                        'anomaly_threshold': 0.0,
-                        'model_version': 0,
-                        'timestamp': inference_request['timestamp'],
-                        'status': 'model_not_ready'
-                    }
+                    return None
             
             sensor_values = inference_request['sensor_values']
             
-            # Normalize sensor values using bounds normalizer
+            # Step 1: Normalize individual sensor values using bounds normalizer
             try:
                 normalized_values = self.bounds_normalizer.process(sensor_values)
             except Exception as norm_error:
                 logging.error(f"AEMLInferenceThread: Normalization failed: {norm_error}")
-                return {'error': str(norm_error), 'status': 'error'}
+                return None
             
-            # Add normalized values to recent data buffer
+            # Step 2: Add normalized values to recent data buffer
             self.recent_data.append(normalized_values)
             
             # Keep buffer at reasonable size
             if len(self.recent_data) > self.window_size * 2:
                 self.recent_data = self.recent_data[-self.window_size * 2:]
             
-            # Need at least window_size samples for inference
+            # Step 3: Need at least window_size samples for inference
             if len(self.recent_data) < self.window_size:
-                return {
-                    'reconstruction_normalized': normalized_values,
-                    'reconstruction_original': sensor_values,
-                    'error_score': 0.0,
-                    'is_anomaly': False,
-                    'status': 'insufficient_data',
-                    'buffer_size': len(self.recent_data),
-                    'timestamp': inference_request['timestamp']
-                }
+                logging.debug("AEMLInferenceThread: Not enough samples to make a window for inference")
+                return None
             
-            # Create inference window from normalized data using window processor
+            # Step 4: Create inference window using window processor
             try:
-                window_data = self.window_processor.process([self.recent_data[-self.window_size:]])
+                # Get the most recent window_size normalized samples
+                current_sequence = self.recent_data[-self.window_size:]
+                
+                # Use window processor to create flattened window (same as training)
+                window_data = self.window_processor.process([current_sequence])
+                
                 if len(window_data) == 0:
                     raise ValueError("No valid windows created")
                 
@@ -621,22 +616,22 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 
             except Exception as window_error:
                 logging.error(f"AEMLInferenceThread: Window creation failed: {window_error}")
-                return {'error': str(window_error), 'status': 'error'}
+                return None
             
-            # Get reconstruction from model (operates on preprocessed data)
+            # Step 5: Get reconstruction from model (operates on preprocessed data)
             reconstruction_normalized = self.model.predict(flattened_window, verbose=0)
             
-            # Denormalize reconstruction to original units
+            # Step 6: Denormalize reconstruction to original units
             try:
                 reconstruction_original = self.bounds_normalizer.denormalize(reconstruction_normalized)
             except Exception as denorm_error:
                 logging.warning(f"AEMLInferenceThread: Denormalization failed: {denorm_error}")
                 reconstruction_original = reconstruction_normalized  # Fallback
             
-            # Compute reconstruction error on normalized data
+            # Step 7: Compute reconstruction error on normalized data
             error_score = float(np.mean((flattened_window - reconstruction_normalized) ** 2))
             
-            # Determine if anomaly
+            # Step 8: Determine if anomaly
             is_anomaly = error_score > self.anomaly_threshold if self.anomaly_threshold else False
             
             result = {
@@ -658,7 +653,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
         except Exception as e:
             logging.error(f"AEMLInferenceThread: Error performing inference: {e}")
-            return {'error': str(e), 'status': 'error'}
+            return None
 
     def parse_inference_request(self, message_data, topic, partition, offset) -> Optional[Dict[str, Any]]:
         """
@@ -697,15 +692,6 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
     def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
         """
         Process incoming message with optional channel filtering and return inference results.
-        
-        Args:
-            message: The message value
-            topic: The topic name
-            partition: The partition number
-            offset: The message offset
-            
-        Returns:
-            Tuple[bool, List[Tuple]]: Success status and list of outputs to send
         """
         try:
             # Parse message
@@ -719,7 +705,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 # Use configured channel filtering
                 filtered_result = self.channel_filter.filter_channels(message_data)
                 if filtered_result is None:
-                    logging.debug(f"MLInfernceThread: Skipping message from {topic}:{partition}:{offset} due to channel filtering")
+                    logging.debug(f"AEMLInferenceThread: Skipping message from {topic}:{partition}:{offset} due to channel filtering")
                     return True, []
                 
                 channel_names, channel_values = filtered_result
@@ -727,7 +713,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 # Extract all numeric channels when no filter configured
                 filtered_result = ChannelFilter.extract_all_channels(message_data)
                 if filtered_result is None:
-                    logging.debug(f"MLInfernceThread: Skipping message from {topic}:{partition}:{offset} - no valid channels")
+                    logging.debug(f"AEMLInferenceThread: Skipping message from {topic}:{partition}:{offset} - no valid channels")
                     return True, []
                 
                 channel_names, channel_values = filtered_result
@@ -736,7 +722,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             filtered_channels = dict(zip(channel_names, channel_values))
             message_data['channels'] = filtered_channels
             
-            logging.debug(f"MLInfernceThread: Extracted {len(channel_values)} channels for inference")
+            logging.debug(f"AEMLInferenceThread: Extracted {len(channel_values)} channels for inference")
             
             # Parse inference request with processed data
             inference_request = self.parse_inference_request(message_data, topic, partition, offset)
@@ -744,14 +730,16 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             if inference_request is None:
                 return False, []
             
-            # Rest of inference logic remains the same...
+            # Perform inference using preprocessing pipeline
             inference_result = self.perform_inference(inference_request)
             
             if inference_result is None:
                 return False, []
             
+            # Store inference result to database
             self._store_inference_result(inference_request, inference_result)
             
+            # Create output message in consistent format
             output_message = {
                 'timestamp': time.time(),
                 'channels': {
@@ -768,17 +756,17 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             return True, [(kafka_topic, json.dumps(output_message))]
             
         except json.JSONDecodeError as e:
-            logging.error(f"MLInfernceThread: JSON decode error for message from {topic}:{partition}:{offset}: {e}")
+            logging.error(f"AEMLInferenceThread: JSON decode error for message from {topic}:{partition}:{offset}: {e}")
             return False, []
         except Exception as e:
-            logging.error(f"MLInfernceThread: Error processing inference message: {e}")
+            logging.error(f"AEMLInferenceThread: Error processing inference message: {e}")
             return False, []
 
     def _store_inference_result(self, inference_request: Dict[str, Any], inference_result: Dict[str, Any]):
         """Store inference result to database using DBManager's record_prediction function."""
         try:
-            if 'error' in inference_result or inference_result.get('status') == 'error':
-                logging.warning(f"AEMLInferenceThread: Not storing inference result due to error: {inference_result.get('error', 'unknown error')}")
+            if inference_result.get('status') != 'success':
+                logging.warning(f"AEMLInferenceThread: Not storing inference result")
                 return
 
             # Extract timestamp from inference request
@@ -822,7 +810,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             )
             
             if status == 0:
-                logging.debug(f"AEMLInferenceThread: Successfully stored inference result for timestamp {source_timestamp_str}")
+                logging.info(f"AEMLInferenceThread: Successfully stored inference result for timestamp {source_timestamp_str}")
             else:
                 logging.error(f"AEMLInferenceThread: Failed to store inference result, status: {status}")
             
@@ -897,13 +885,7 @@ class AutoencoderAgent(AgentBase):
 
 def main():
     """Main entry point for autoencoder agent."""
-
-    
-    # Set up logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    setup_logging()
     
     config_path = os.getenv('CONFIG_PATH', '/app/config.yaml')
     

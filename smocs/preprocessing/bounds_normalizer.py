@@ -118,17 +118,25 @@ class BoundsNormalizer(BasePreprocessor):
         window_size = window_length // n_channels
         normalized_data = np.zeros_like(windowed_data)
         
+        logging.debug(f"BoundsNormalizer: Processing windowed data: {n_samples} samples, window_length={window_length}, n_channels={n_channels}, window_size={window_size}")
+        
         for sample_idx in range(n_samples):
             window = windowed_data[sample_idx]
             
-            # Reshape to (window_size, n_channels)
-            reshaped_window = window.reshape(window_size, n_channels)
-            
-            # Normalize each timestep
-            normalized_window = np.array([self._normalize_sample(timestep) for timestep in reshaped_window])
-            
-            # Flatten back
-            normalized_data[sample_idx] = normalized_window.flatten()
+            try:
+                # Reshape to (window_size, n_channels)
+                reshaped_window = window.reshape(window_size, n_channels)
+                
+                # Normalize each timestep
+                normalized_window = np.array([self._normalize_sample(timestep) for timestep in reshaped_window])
+                
+                # Flatten back
+                normalized_data[sample_idx] = normalized_window.flatten()
+                
+            except Exception as reshape_error:
+                logging.error(f"BoundsNormalizer: Error processing sample {sample_idx}: {reshape_error}")
+                logging.error(f"BoundsNormalizer: Window shape: {window.shape}, trying to reshape to ({window_size}, {n_channels})")
+                raise
         
         return normalized_data
     

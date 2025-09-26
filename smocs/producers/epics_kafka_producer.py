@@ -82,7 +82,7 @@ class EpicsKafkaProducer(KafkaProducerBase):
                 # Send to Kafka using base class method
                 record_metadata = self.send_to_kafka(kafka_topic, message)
                 
-                logging.debug(f'Forwarded to Kafka topic "{kafka_topic}" (from EPICS "{self.source}") - partition {record_metadata.partition}, offset {record_metadata.offset}')
+                logging.info(f'Forwarded to Kafka topic "{kafka_topic}" (from EPICS "{self.source}") - timestamp {timestamp} -channels {channels} - partition {record_metadata.partition}, offset {record_metadata.offset}')
                     
             
         except KeyboardInterrupt:

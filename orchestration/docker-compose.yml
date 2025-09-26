@@ -75,7 +75,7 @@ services:
     platform: linux/amd64
     environment:
       EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
-      SMOCS_LOG_LEVEL: DEBUG
+      SMOCS_LOG_LEVEL: INFO
     command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
 
   mqtt-kafka-producer:
@@ -125,7 +125,7 @@ services:
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
       PYTHONPATH: /app
-      SMOCS_LOG_LEVEL: DEBUG
+      SMOCS_LOG_LEVEL: INFO
     networks:
       - kafka-net
     command: ["sh", "-c", "sleep 15 && exec python -m smocs.consumers.influxdb_kafka_consumer"]
@@ -161,7 +161,7 @@ services:
     profiles: ["autoencoder"]
     environment:
       AGENT_TYPE: autoencoder
-      SMOCS_LOG_LEVEL: DEBUG
+      SMOCS_LOG_LEVEL: INFO
 
 volumes:
   influxdb-data:
