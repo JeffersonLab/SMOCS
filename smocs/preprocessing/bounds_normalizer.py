@@ -11,7 +11,6 @@ class BoundsNormalizer(BasePreprocessor):
         super().__init__(config)
         self.bounds = np.array(self.config['bounds'], dtype=np.float32)
         self.channels = self.config.get('channels', [])
-        self.clip = self.config.get('clip', False)
     
     def validate_config(self):
         """Validate configuration parameters."""
@@ -34,10 +33,6 @@ class BoundsNormalizer(BasePreprocessor):
             channels = self.config['channels']
             if len(bounds) != len(channels):
                 raise ValueError(f"BoundsNormalizer: Number of bounds ({len(bounds)}) must match number of channels ({len(channels)})")
-        
-        # Validate clip parameter
-        if 'clip' in self.config and not isinstance(self.config['clip'], bool):
-            raise ValueError("BoundsNormalizer: 'clip' must be a boolean")
     
     def process(self, data: np.ndarray, **kwargs) -> np.ndarray:
         """
@@ -137,24 +132,13 @@ class BoundsNormalizer(BasePreprocessor):
         normalized = np.zeros_like(sample)
         
         for i, (value, (min_bound, max_bound)) in enumerate(zip(sample, self.bounds)):
-            # Check if value is out of bounds
+            # Check if value is out of bounds - always raise error
             if value < min_bound or value > max_bound:
-                if self.clip:
-                    # Log and clip
-                    if value < min_bound:
-                        logging.debug(f"BoundsNormalizer: Clipping value {value} to lower bound {min_bound} for channel {i}")
-                        value = min_bound
-                    else:
-                        logging.debug(f"BoundsNormalizer: Clipping value {value} to upper bound {max_bound} for channel {i}")
-                        value = max_bound
-                else:
-                    # Raise error with detailed information
-                    channel_name = self.channels[i] if i < len(self.channels) else f"channel_{i}"
-                    raise ValueError(
-                        f"BoundsNormalizer: Value {value} out of bounds [{min_bound}, {max_bound}] "
-                        f"for channel {i} ({channel_name}). "
-                        f"Set 'clip': true in config to enable clipping."
-                    )
+                channel_name = self.channels[i] if i < len(self.channels) else f"channel_{i}"
+                raise ValueError(
+                    f"BoundsNormalizer: Value {value} out of bounds [{min_bound}, {max_bound}] "
+                    f"for channel {i} ({channel_name})."
+                )
             
             # Min-max normalization to [0, 1]
             range_size = max_bound - min_bound
@@ -167,7 +151,7 @@ class BoundsNormalizer(BasePreprocessor):
                     f"(min_bound == max_bound == {min_bound}), using 0.5"
                 )
                 normalized[i] = 0.5
-    
+
         return normalized
     
     def _normalize_windowed_data(self, windowed_data: np.ndarray) -> np.ndarray:
