@@ -64,6 +64,7 @@ autoencoder_agent:
       - [-1, 1]
       - [-1, 1]
       - [-1, 1]
+      clip: False
   model_output:
       channels:
       - IPM9A01.PHAS
