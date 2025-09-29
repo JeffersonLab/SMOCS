@@ -33,9 +33,6 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
         # Setup database connection
         self.db_manager = self._setup_db_connection()
         
-        # Build initial model
-        self.build_model()
-        
         logging.info(f"MLTrainingThread: ML Training Thread initialized for agent {agent_id}")
     
     def _setup_db_connection(self) -> DBManager:
@@ -132,7 +129,7 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
     
     @abstractmethod
     def build_model(self):
-        """Build/initialize the model. Called during __init__."""
+        """Build/initialize the model"""
         pass
     
     @abstractmethod

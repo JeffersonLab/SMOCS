@@ -42,11 +42,17 @@ kafka:
   replication_factor: 1
 
 autoencoder_agent:
+  # Explicit preprocessing pipeline - executed in order
+  preprocessing_pipeline:
+    - bounds_normalizer
+    - window_processor
+  # For no preprocessing, use: preprocessing_pipeline: []
   window_size: 3
   min_training_samples: 100
   encoder_dims: [32, 16]
   learning_rate: 0.001
   batch_size: 4
+  samples_multiplier: 10
   epochs: 50
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:

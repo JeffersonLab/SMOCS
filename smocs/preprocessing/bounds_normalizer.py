@@ -39,7 +39,10 @@ class BoundsNormalizer(BasePreprocessor):
         Normalize data using min-max scaling with specified bounds.
         
         Args:
-            data: Input data to normalize
+            data: Input data to normalize - supports:
+                  - 1D: single sample (n_features,)
+                  - 2D: multiple samples (n_samples, n_features) or flattened windows
+                  - 3D: sequences (n_sequences, sequence_length, n_features) - from database
             **kwargs: Additional parameters (unused currently)
             
         Returns:
@@ -58,6 +61,7 @@ class BoundsNormalizer(BasePreprocessor):
             if data.ndim == 1:
                 # Single sample
                 normalized_data = self._normalize_sample(data)
+                
             elif data.ndim == 2:
                 # Multiple samples or windowed data
                 if data.shape[1] == len(self.bounds):
@@ -66,6 +70,11 @@ class BoundsNormalizer(BasePreprocessor):
                 else:
                     # Windowed data - need to handle differently
                     normalized_data = self._normalize_windowed_data(data)
+                    
+            elif data.ndim == 3:
+                # 3D data from database: (n_sequences, sequence_length, n_features)
+                normalized_data = self._normalize_3d_sequences(data)
+                
             else:
                 raise ValueError(f"BoundsNormalizer: Unsupported data dimensionality: {data.ndim}")
             
@@ -81,6 +90,39 @@ class BoundsNormalizer(BasePreprocessor):
         except Exception as e:
             logging.error(f"BoundsNormalizer: Error normalizing data: {e}")
             raise
+    
+    def _normalize_3d_sequences(self, sequences: np.ndarray) -> np.ndarray:
+        """
+        Normalize 3D sequence data from database.
+        
+        Args:
+            sequences: Array of shape (n_sequences, sequence_length, n_features)
+            
+        Returns:
+            Normalized sequences with same shape
+        """
+        n_sequences, sequence_length, n_features = sequences.shape
+        
+        logging.debug(f"BoundsNormalizer: Processing 3D sequences: {n_sequences} sequences, {sequence_length} timesteps, {n_features} features")
+        
+        # Validate feature count matches bounds
+        if n_features != len(self.bounds):
+            raise ValueError(f"BoundsNormalizer: Number of features ({n_features}) doesn't match number of bounds ({len(self.bounds)})")
+        
+        # Normalize each sequence
+        normalized_sequences = np.zeros_like(sequences)
+        
+        for seq_idx in range(n_sequences):
+            sequence = sequences[seq_idx]  # Shape: (sequence_length, n_features)
+            
+            # Normalize each timestep in the sequence
+            for t in range(sequence_length):
+                timestep = sequence[t]  # Shape: (n_features,)
+                normalized_sequences[seq_idx, t] = self._normalize_sample(timestep)
+        
+        logging.debug(f"BoundsNormalizer: Normalized {n_sequences} sequences")
+        
+        return normalized_sequences
     
     def _normalize_sample(self, sample: np.ndarray) -> np.ndarray:
         """Normalize a single sample."""
@@ -161,12 +203,25 @@ class BoundsNormalizer(BasePreprocessor):
                     return np.array([self._denormalize_sample(sample) for sample in normalized_data])
                 else:
                     return self._denormalize_windowed_data(normalized_data)
+            elif normalized_data.ndim == 3:
+                return self._denormalize_3d_sequences(normalized_data)
             else:
                 raise ValueError(f"BoundsNormalizer: Unsupported data dimensionality for denormalization: {normalized_data.ndim}")
                 
         except Exception as e:
             logging.error(f"BoundsNormalizer: Error denormalizing data: {e}")
             raise
+    
+    def _denormalize_3d_sequences(self, sequences: np.ndarray) -> np.ndarray:
+        """Denormalize 3D sequence data."""
+        n_sequences, sequence_length, n_features = sequences.shape
+        denormalized_sequences = np.zeros_like(sequences)
+        
+        for seq_idx in range(n_sequences):
+            for t in range(sequence_length):
+                denormalized_sequences[seq_idx, t] = self._denormalize_sample(sequences[seq_idx, t])
+        
+        return denormalized_sequences
     
     def _denormalize_sample(self, normalized_sample: np.ndarray) -> np.ndarray:
         """Denormalize a single sample."""
