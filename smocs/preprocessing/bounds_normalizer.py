@@ -145,7 +145,7 @@ class BoundsNormalizer(BasePreprocessor):
             if range_size > 0:
                 normalized[i] = (value - min_bound) / range_size
             else:
-                normalized[i] = 0.0  # Handle case where min_bound == max_bound
+                normalized[i] = 0.5
         
         return normalized
     
