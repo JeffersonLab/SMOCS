@@ -598,6 +598,12 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Determine if anomaly
             is_anomaly = error_score > self.anomaly_threshold if self.anomaly_threshold else False
             
+            # Extract most recent timestep from reconstruction
+            # Reshape from flattened (window_size * n_channels,) to (window_size, n_channels)
+            n_channels = len(sensor_values)  # Number of channels from original sensor reading
+            reconstruction_reshaped = reconstruction_original.reshape(self.window_size, n_channels)
+            most_recent_reconstruction = reconstruction_reshaped[-1]  # Last timestep
+            
             result = {
                 'reconstruction_normalized': reconstruction_normalized.flatten(),
                 'reconstruction_original': reconstruction_original.flatten(),
@@ -607,7 +613,9 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 'anomaly_threshold': self.anomaly_threshold,
                 'model_version': self.current_model_version,
                 'timestamp': inference_request['timestamp'],
-                'status': 'success'
+                'status': 'success',
+                'most_recent_input': sensor_values,  # Raw unnormalized input
+                'most_recent_reconstruction': most_recent_reconstruction  # Denormalized reconstruction
             }
             
             if is_anomaly:
@@ -618,6 +626,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         except Exception as e:
             logging.error(f"AEMLInferenceThread: Error performing inference: {e}")
             return None
+        
 
     def parse_inference_request(self, message_data, topic, partition, offset) -> Optional[Dict[str, Any]]:
         """
@@ -675,7 +684,6 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 channel_names, channel_values = filtered_result
             else:
                 # Extract all numeric channels when no filter configured
-                from smocs.utils import ChannelFilter
                 filtered_result = ChannelFilter.extract_all_channels(message_data)
                 if filtered_result is None:
                     logging.debug(f"AEMLInferenceThread: Skipping message from {topic}:{partition}:{offset} - no valid channels")
@@ -704,17 +712,33 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Store inference result to database
             self._store_inference_result(inference_request, inference_result)
             
+            # Get channel names from config
+            model_input_channels = self.config.get('model_input', {}).get('channels', [])
+            
+            # Create base channels for output
+            output_channels = {
+                'agent_id': self.agent_id,
+                'error_score': inference_result.get('error_score', 0.0),
+                'is_anomaly': inference_result.get('is_anomaly', False),
+                'anomaly_threshold': inference_result.get('anomaly_threshold', 0.0),
+                'model_version': inference_result.get('model_version', 0),
+                'status': inference_result.get('status', 'unknown')
+            }
+            
+            # Add individual channel fields for input and reconstruction
+            most_recent_input = inference_result.get('most_recent_input')
+            most_recent_reconstruction = inference_result.get('most_recent_reconstruction')
+            
+            if most_recent_input is not None and most_recent_reconstruction is not None:
+                for i, channel_name in enumerate(model_input_channels):
+                    if i < len(most_recent_input) and i < len(most_recent_reconstruction):
+                        output_channels[f'{channel_name}_input'] = float(most_recent_input[i])
+                        output_channels[f'{channel_name}_reconstructed'] = float(most_recent_reconstruction[i])
+            
             # Create output message in consistent format
             output_message = {
                 'timestamp': time.time(),
-                'channels': {
-                    'agent_id': self.agent_id,
-                    'error_score': inference_result.get('error_score', 0.0),
-                    'is_anomaly': inference_result.get('is_anomaly', False),
-                    'anomaly_threshold': inference_result.get('anomaly_threshold', 0.0),
-                    'model_version': inference_result.get('model_version', 0),
-                    'status': inference_result.get('status', 'unknown')
-                }
+                'channels': output_channels
             }
             
             kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
