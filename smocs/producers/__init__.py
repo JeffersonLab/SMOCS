@@ -2,6 +2,13 @@
 Producer implementations for SMOCS.
 """
 
-from .mqtt_kafka_producer import MQTTKafkaProducer
+__all__ = ["MQTTKafkaProducer", "EpicsKafkaProducer"]
 
-__all__ = ["MQTTKafkaProducer"]
+def __getattr__(name):
+    if name == "MQTTKafkaProducer":
+        from .mqtt_kafka_producer import MQTTKafkaProducer
+        return MQTTKafkaProducer
+    elif name == "EpicsKafkaProducer":
+        from .epics_kafka_producer import EpicsKafkaProducer
+        return EpicsKafkaProducer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
