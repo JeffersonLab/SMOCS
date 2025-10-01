@@ -2,7 +2,12 @@ from abc import ABC, abstractmethod
 from kafka import KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
 import logging
+import json
+import re
+from datetime import datetime
+from typing import Union
 
+from smocs.utils import validate_topic_format, validate_message_format
 
 class KafkaProducerBase(ABC):
     """
@@ -11,6 +16,7 @@ class KafkaProducerBase(ABC):
     This class provides common Kafka functionality including:
     - Kafka producer and admin client setup
     - Topic creation
+    - Message and topic format validation
     - Resource cleanup
     
     Subclasses must implement the start() method to define their specific
@@ -110,7 +116,7 @@ class KafkaProducerBase(ABC):
     
     def send_to_kafka(self, topic_name, message, key=None):
         """
-        Send a message to Kafka topic.
+        Send a message to Kafka topic with validation.
         
         Args:
             topic_name (str): Kafka topic name
@@ -121,9 +127,16 @@ class KafkaProducerBase(ABC):
             RecordMetadata: Metadata about the sent record
             
         Raises:
+            ValueError: If topic or message format is invalid
             Exception: If sending fails
         """
         try:
+            # Validate topic format
+            validate_topic_format(topic_name)
+            
+            # Validate message format
+            validate_message_format(message)
+            
             # Ensure topic exists
             self.create_topic_if_not_exists(topic_name)
             
@@ -143,6 +156,9 @@ class KafkaProducerBase(ABC):
             
             return record_metadata
             
+        except ValueError as e:
+            logging.error(f"Validation failed for topic '{topic_name}': {e}")
+            raise
         except Exception as e:
             logging.error(f"Error sending message to Kafka topic {topic_name}: {e}")
             raise

@@ -1,4 +1,4 @@
-source: "gymnasium"
+source: "epics"
 
 mqtt:
   topics:      
@@ -26,20 +26,50 @@ epics:
       - IPM9A02.PHAS
 
 gymnasium:
-  environment: "HalfCheetah-v4"
+  environment: "MountainCarContinuous-v0"
   input_topic: "gymnasium-action"
-  output_topic: "gymnasmium-output"
+  output_topic: "gymnasium-output"
   blocking_mode: false
   default_action_strategy: "random"
   step_delay: 0.1
   reset_on_start: true
-  max_episode_steps: null  # null uses environment default
+  max_episode_steps: 10000000  # null uses environment default
   render_mode: null        # "human", "rgb_array", or null
 
 kafka:
   auto_create: true
   partitions: 1
   replication_factor: 1
+
+autoencoder_agent:
+  # Explicit preprocessing pipeline - executed in order
+  preprocessing_pipeline:
+    - bounds_normalizer
+    - window_processor
+  # For no preprocessing, use: preprocessing_pipeline: []
+  window_size: 3
+  min_training_samples: 100
+  encoder_dims: [32, 16]
+  learning_rate: 0.001
+  batch_size: 4
+  samples_multiplier: 10
+  epochs: 50
+  enabled_threads: ['ingest', 'training', 'inference']
+  model_input:
+      channels:
+      - state_0
+      - state_1
+      bounds:
+      - [-1.2, 0.6]
+      - [-0.07, 0.07]
+  model_output:
+      channels:
+      - state_0
+      - state_1
+  kafka_topics:
+    input: "gymnasium-output"
+    output: "autoencoder-anomalies"
+    training_output: "autoencoder-training-results"
 
 project:
   name: "smocs-gym-streaming"

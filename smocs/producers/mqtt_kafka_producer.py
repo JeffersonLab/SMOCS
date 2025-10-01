@@ -6,10 +6,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from smocs.cores import KafkaProducerBase
-from smocs.utils import ConfigLoader
-
-logging.basicConfig(level=logging.INFO)
-
+from smocs.utils import ConfigLoader, setup_logging
 
 class MQTTKafkaProducer(KafkaProducerBase):
     """
@@ -267,6 +264,7 @@ def main():
     """
     Main entry point for the MQTT to Kafka producer.
     """
+    setup_logging()
     logging.info("Starting configurable MQTT-to-Kafka bridge")
     
     producer = MQTTKafkaProducer()

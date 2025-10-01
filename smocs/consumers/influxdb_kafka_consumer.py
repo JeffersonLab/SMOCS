@@ -6,9 +6,7 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from smocs.cores import KafkaConsumerBase
-
-logging.basicConfig(level=logging.INFO)
-
+from smocs.utils import ChannelFilter, setup_logging
 
 class InfluxDBConsumer(KafkaConsumerBase):
     """
@@ -96,7 +94,7 @@ class InfluxDBConsumer(KafkaConsumerBase):
             
             # # Write to InfluxDB
             self.write_api.write(bucket=self.influxdb_bucket, org=self.influxdb_org, record=point)
-            logging.info(f"Successfully wrote data to InfluxDB bucket: {self.influxdb_bucket}")
+            logging.info(f"Successfully wrote {topic} with data {parsed_data} to InfluxDB bucket: {self.influxdb_bucket}")
             
             return True
             
@@ -139,29 +137,39 @@ class InfluxDBConsumer(KafkaConsumerBase):
             logging.error(f"Error parsing message data: {e}")
             return None
 
-    
     def create_influx_point(self, message, topic):
         """
-        Create an InfluxDB point from message data.
+        Create an InfluxDB point from message data using channel filtering.
         
         Args:
-            data (dict): Parsed message data
+            message (dict): Parsed message data
             topic (str): Kafka topic name
             
         Returns:
             Point or None: InfluxDB point or None if creation failed
         """
         try:
-            data = message['channels']
+            # Use ChannelFilter to extract all numeric channels
+            filtered_result = ChannelFilter.extract_all_channels(message)
             
-            point = Point(topic) \
+            if filtered_result is None:
+                logging.warning(f"No valid numeric channels found for topic {topic}")
+                return None
             
-            for key, value in data.items():
-                point.field(key, value)
-        
+            channel_names, channel_values = filtered_result
+            
+            # Create InfluxDB point
+            point = Point(topic)
+            
+            # Add all numeric fields to the point
+            for name, value in zip(channel_names, channel_values):
+                point.field(name, value)
+            
             # Optionally use the original timestamp
-            # point.time(data['timeStamp'])
+            # if 'timestamp' in message:
+            #     point.time(message['timestamp'])
             
+            logging.debug(f"Created InfluxDB point with {len(channel_values)} fields for topic {topic}")
             return point
             
         except Exception as e:
@@ -188,6 +196,7 @@ def main():
     """
     Main entry point for the InfluxDB consumer.
     """
+    setup_logging()
     logging.info("Starting InfluxDB consumer...")
     
     consumer = InfluxDBConsumer()

@@ -3,7 +3,11 @@ from kafka import KafkaConsumer
 import logging
 import time
 import re
+import json
+from datetime import datetime
+from typing import Union
 
+from smocs.utils import validate_topic_format, validate_message_format
 
 class KafkaConsumerBase(ABC):
     """
@@ -12,6 +16,7 @@ class KafkaConsumerBase(ABC):
     This class provides common Kafka consumer functionality including:
     - Kafka consumer setup with sensible defaults
     - Main consumption loop with error handling
+    - Message and topic format validation
     - Resource cleanup
     
     Subclasses must implement the process_message() method to define their specific
@@ -134,7 +139,8 @@ class KafkaConsumerBase(ABC):
     
     def consume_messages(self):
         """
-        Main consumption loop that polls for messages and processes them.
+        Main consumption loop that polls for messages, validates them, and processes them.
+        Invalid messages are logged but skipped to avoid blocking processing.
         """
         logging.info("Starting message consumption loop...")
         
@@ -150,6 +156,22 @@ class KafkaConsumerBase(ABC):
                 for topic_partition, messages in message_batch.items():
                     for message in messages:
                         try:
+                            # Validate topic format
+                            try:
+                                validate_topic_format(message.topic)
+                            except ValueError as e:
+                                logging.error(f"Invalid topic format from {message.topic}:{message.partition}:{message.offset}: {e}")
+                                continue
+                            
+                            # Validate message format
+                            try:
+                                validate_message_format(message.value)
+                            except ValueError as e:
+                                logging.error(f"Invalid message format from {message.topic}:{message.partition}:{message.offset}: {e}")
+                                logging.debug(f"Invalid message content: {message.value}")
+                                continue
+                            
+                            # Process the validated message
                             success = self.process_message(
                                 message=message.value,
                                 topic=message.topic,
@@ -187,8 +209,8 @@ class KafkaConsumerBase(ABC):
         Process a single message. Must be implemented by subclasses.
         
         Args:
-            message (str): The message value (already deserialized)
-            topic (str): The topic name
+            message (str): The message value (already deserialized and validated)
+            topic (str): The topic name (already validated)
             partition (int): The partition number
             offset (int): The message offset
             
