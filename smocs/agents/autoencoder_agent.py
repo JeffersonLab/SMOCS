@@ -82,6 +82,8 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.batch_size = config.get('batch_size', 32)
         self.samples_multiplier = config.get('samples_multiplier', 10)
         self.epochs = config.get('epochs', 50)
+        self.anomaly_threshold_type = config.get('anomaly_threshold_type', 'fixed')
+        self.anomaly_threshold = 0.02
         
         # Model state
         self.model = None
@@ -249,6 +251,25 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             logging.error(f"AEMLTrainingThread: Error training model: {e}")
             logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}")
             return {'error': str(e)}
+        
+    def get_anomaly_threshold(self, errors: np.ndarray, percentile: float = 95.0) -> float:
+        """
+        Calculate anomaly detection threshold based on reconstruction errors.
+        
+        Args:
+            errors: Array of reconstruction errors
+            percentile: Percentile to use for threshold (default 95.0)
+            
+        Returns:
+            Threshold value
+        """
+        if len(errors) == 0:
+            return self.anomaly_threshold
+        if self.anomaly_threshold_type == 'percentile':
+            threshold = float(np.percentile(errors, percentile))
+        else:
+            threshold = 0.02 # Default fixed threshold if unknown type
+        return threshold
     
     def eval_model(self) -> Dict[str, Any]:
         """
@@ -291,7 +312,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                         'mean_reconstruction_error': float(np.mean(mse_errors)),
                         'std_reconstruction_error': float(np.std(mse_errors)),
                         'max_reconstruction_error': float(np.max(mse_errors)),
-                        'anomaly_threshold_95': float(np.percentile(mse_errors, 95)),
+                        'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
                         'eval_samples': len(eval_subset),
                         'mean_denormalized_error': float(np.mean(denorm_errors)),
                         'sample_original_range': [float(np.min(sample_original)), float(np.max(sample_original))],
@@ -303,7 +324,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                         'mean_reconstruction_error': float(np.mean(mse_errors)),
                         'std_reconstruction_error': float(np.std(mse_errors)),
                         'max_reconstruction_error': float(np.max(mse_errors)),
-                        'anomaly_threshold_95': float(np.percentile(mse_errors, 95)),
+                        'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
                         'eval_samples': len(eval_subset)
                     }
                 
@@ -313,7 +334,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                     'mean_reconstruction_error': float(np.mean(mse_errors)),
                     'std_reconstruction_error': float(np.std(mse_errors)),
                     'max_reconstruction_error': float(np.max(mse_errors)),
-                    'anomaly_threshold_95': float(np.percentile(mse_errors, 95)),
+                    'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
                     'eval_samples': len(eval_subset)
                 }
             
