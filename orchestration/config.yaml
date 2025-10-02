@@ -1,4 +1,4 @@
-source: "epics"
+source: "gymnasium"
 
 mqtt:
   topics:      
@@ -26,7 +26,7 @@ epics:
       - IPM9A02.PHAS
 
 gymnasium:
-  environment: "MountainCarContinuous-v0"
+  environment: "SCORE-IndustryParticleAccelerator-v0"
   input_topic: "gymnasium-action"
   output_topic: "gymnasium-output"
   blocking_mode: false
@@ -59,13 +59,19 @@ autoencoder_agent:
       channels:
       - state_0
       - state_1
+      - state_2
+      - state_3
       bounds:
-      - [-1.2, 0.6]
-      - [-0.07, 0.07]
+      - [0.5, 2.0]
+      - [0.0, 500.0]
+      - [0.0, 1.0]
+      - [0.5, 2.0]
   model_output:
       channels:
       - state_0
       - state_1
+      - state_2
+      - state_3
   kafka_topics:
     input: "gymnasium-output"
     output: "autoencoder-anomalies"
