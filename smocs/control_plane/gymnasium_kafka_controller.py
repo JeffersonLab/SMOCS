@@ -4,6 +4,7 @@ import time
 import os
 import numpy as np
 from typing import List, Tuple, Union, Callable, Any
+import smocs.control_plane
 import gymnasium as gym
 
 from smocs.cores import KafkaStreamingProcessBase
