@@ -6,6 +6,7 @@ import logging
 import traceback
 import numpy as np
 import pickle
+import argparse
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import tensorflow as tf
@@ -832,13 +833,16 @@ class AutoencoderAgent(AgentBase):
     Autoencoder agent for time series anomaly detection.
     """
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, config_key: str = None):
         super().__init__("AutoencoderAgent")
         
         # Load configuration
         if config_path:
             config_loader = ConfigLoader(config_path)
-            autoencoder_config = config_loader.config.get('autoencoder_agent', {})
+            if config_key is None:
+                config_key = "autoencoder_agent"
+            autoencoder_config = config_loader.config.get(config_key, {})
+            
             # Get enabled threads directly from config
             self.enabled_threads = autoencoder_config.get('enabled_threads', ['ingest', 'training', 'inference'])
         else:
@@ -895,12 +899,17 @@ class AutoencoderAgent(AgentBase):
 
 def main():
     """Main entry point for autoencoder agent."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--agent_config_key", help="Key for agent configuration dict in the config file", type=str, default='autoencoder1')
+    args = parser.parse_args()
+    config_key = args.agent_config_key
+
     setup_logging()
     
     config_path = os.getenv('CONFIG_PATH', '/app/config.yaml')
     
     try:
-        agent = AutoencoderAgent(config_path)
+        agent = AutoencoderAgent(config_path, config_key)
         agent.start()
     except KeyboardInterrupt:
         logging.info("Shutting down autoencoder agent...")
