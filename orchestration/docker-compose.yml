@@ -149,19 +149,30 @@ services:
       PYTHONPATH: /app
     networks:
       - kafka-net
-    ports:
-      - "3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     restart: unless-stopped
     command: ["/bin/bash", "/entrypoint.sh"]
 
-  autoencoder-agent:
+  autoencoder-agent1:
     extends: agent
-    profiles: ["autoencoder"]
+    profiles: ["autoencoder1"]
     environment:
       AGENT_TYPE: autoencoder
-      SMOCS_LOG_LEVEL: INFO
+      AGENT_CONFIG: autoencoder_agent1
+      SMOCS_LOG_LEVEL: DEBUG
+    ports:
+      - "3307:3306"
+
+  autoencoder-agent2:
+    extends: agent
+    profiles: ["autoencoder2"]
+    environment:
+      AGENT_TYPE: autoencoder
+      AGENT_CONFIG: autoencoder_agent2
+      SMOCS_LOG_LEVEL: DEBUG
+    ports:
+      - "3305:3305"
 
 volumes:
   influxdb-data:
