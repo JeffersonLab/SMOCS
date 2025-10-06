@@ -53,10 +53,10 @@ autoencoder_agent1:
   window_size: 20
   min_training_samples: 100
   encoder_dims: [32, 16]
-  learning_rate: 0.0001
-  batch_size: 32
+  learning_rate: 0.001
+  batch_size: 16
   samples_multiplier: 3
-  epochs: 2
+  epochs: 10
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
@@ -64,8 +64,8 @@ autoencoder_agent1:
       - IPMK101.YPOS
       - IPMK101.PHAS
       bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
+      - [-1.0, 1.0]
+      - [-1.0, 1.0]
       - [0.0, 2.0]
       
   model_output:
@@ -87,10 +87,10 @@ autoencoder_agent2:
   window_size: 20
   min_training_samples: 100
   encoder_dims: [32, 16]
-  learning_rate: 0.0001
-  batch_size: 32
+  learning_rate: 0.001
+  batch_size: 16
   samples_multiplier: 3
-  epochs: 2
+  epochs: 10
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
@@ -98,8 +98,8 @@ autoencoder_agent2:
       - IPMK203.YPOS
       - IPMK203.PHAS
       bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
+      - [-1.0, 1.0]
+      - [-1.0, 1.0]
       - [0.0, 2.0]
       
   model_output:
