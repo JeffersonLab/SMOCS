@@ -1,4 +1,4 @@
-source: "gymnasium"
+source: "epics"
 
 mqtt:
   topics:      
@@ -18,13 +18,16 @@ mqtt:
 epics:
     source: CEBAF
     PVs:
-      - IPM9A01.XPOS
-      - IPM9A01.YPOS
-      - IPM9A01.PHAS
-      - IPM9A02.XPOS
-      - IPM9A02.YPOS
-      - IPM9A02.PHAS
-
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+      - IPMK203.PHAS
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IPMK101.PHAS
+      - IPMK401.XPOS
+      - IPMK401.YPOS
+      - IPMK401.PHAS
+      
 gymnasium:
   environment: "SCORE-IndustryParticleAccelerator-v0"
   input_topic: "gymnasium-action"
@@ -41,41 +44,73 @@ kafka:
   partitions: 1
   replication_factor: 1
 
-autoencoder_agent:
+autoencoder_agent1:
   # Explicit preprocessing pipeline - executed in order
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
   # For no preprocessing, use: preprocessing_pipeline: []
-  window_size: 3
+  window_size: 20
   min_training_samples: 100
   encoder_dims: [32, 16]
-  learning_rate: 0.001
-  batch_size: 4
-  samples_multiplier: 10
-  epochs: 50
+  learning_rate: 0.0001
+  batch_size: 32
+  samples_multiplier: 3
+  epochs: 2
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - state_0
-      - state_1
-      - state_2
-      - state_3
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IPMK101.PHAS
       bounds:
-      - [0.5, 2.0]
-      - [0.0, 500.0]
-      - [0.0, 1.0]
-      - [0.5, 2.0]
+      - [-2.0, 2.0]
+      - [-2.0, 2.0]
+      - [0.0, 2.0]
+      
   model_output:
       channels:
-      - state_0
-      - state_1
-      - state_2
-      - state_3
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IPMK101.PHAS
   kafka_topics:
-    input: "gymnasium-output"
-    output: "autoencoder-anomalies"
-    training_output: "autoencoder-training-results"
+    input: "CEBAF"
+    output: "autoencoder1-anomalies"
+    training_output: "autoencoder1-training-results"
+
+autoencoder_agent2:
+  # Explicit preprocessing pipeline - executed in order
+  preprocessing_pipeline:
+    - bounds_normalizer
+    - window_processor
+  # For no preprocessing, use: preprocessing_pipeline: []
+  window_size: 20
+  min_training_samples: 100
+  encoder_dims: [32, 16]
+  learning_rate: 0.0001
+  batch_size: 32
+  samples_multiplier: 3
+  epochs: 2
+  enabled_threads: ['ingest', 'training', 'inference']
+  model_input:
+      channels:
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+      - IPMK203.PHAS
+      bounds:
+      - [-2.0, 2.0]
+      - [-2.0, 2.0]
+      - [0.0, 2.0]
+      
+  model_output:
+      channels:
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+      - IPMK203.PHAS
+  kafka_topics:
+    input: "CEBAF"
+    output: "autoencoder2-anomalies"
+    training_output: "autoencoder2-training-results"
 
 project:
-  name: "smocs-gym-streaming"
+  name: "smocs-uitf"
