@@ -55,21 +55,9 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         
         # Extract topics from config
         input_topic = self.gym_config['input_topic']
-        
-        # Handle both old and new config formats
-        if 'output_topics' in self.gym_config:
-            self.output_topics = {
-                'sarsa': self.gym_config['output_topics']['sarsa'],
-                'state': self.gym_config['output_topics']['state'],
-                'decomposed': self.gym_config['output_topics']['decomposed']
-            }
-        else:
-            # Backward compatibility: use old single output_topic as decomposed
-            self.output_topics = {
-                'sarsa': 'gymnasium-sarsa',
-                'state': 'gymnasium-state',
-                'decomposed': self.gym_config['output_topic']
-            }
+
+        # ConfigLoader now always returns output_topics as a dictionary
+        self.output_topics = self.gym_config['output_topics']
         
         # Store configuration
         self.blocking_mode = self.gym_config['blocking_mode']

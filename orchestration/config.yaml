@@ -27,6 +27,7 @@ epics:
 
 gymnasium:
   environment: "MountainCarContinuous-v0"
+  input_topic: "gymnasium-action"
   output_topics:
     sarsa: "gymnasium-sarsa"
     state: "gymnasium-state"

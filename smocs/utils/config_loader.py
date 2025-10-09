@@ -78,12 +78,32 @@ class ConfigLoader:
     def get_gymnasium_render_mode(self) -> Optional[str]:
         return self.config.get('gymnasium', {}).get('render_mode')
     
+    def get_gymnasium_output_topics(self) -> Dict[str, str]:
+        """Get output topics configuration with defaults"""
+        output_topics = self.config.get('gymnasium', {}).get('output_topics')
+        
+        if output_topics:
+            # New format with multiple topics
+            return {
+                'sarsa': output_topics.get('sarsa', 'gymnasium-sarsa'),
+                'state': output_topics.get('state', 'gymnasium-state'),
+                'decomposed': output_topics.get('decomposed', 'gymnasium-output')
+            }
+        else:
+            # Backward compatibility: use old single output_topic
+            single_topic = self.get_gymnasium_output_topic()
+            return {
+                'sarsa': 'gymnasium-sarsa',
+                'state': 'gymnasium-state',
+                'decomposed': single_topic
+            }
+
     def get_gymnasium_config(self) -> Dict[str, Any]:
         """Get complete gymnasium configuration with defaults"""
         return {
             'environment': self.get_gymnasium_environment(),
             'input_topic': self.get_gymnasium_input_topic(),
-            'output_topic': self.get_gymnasium_output_topic(),
+            'output_topics': self.get_gymnasium_output_topics(),  # Changed!
             'blocking_mode': self.get_gymnasium_blocking_mode(),
             'default_action_strategy': self.get_gymnasium_default_action_strategy(),
             'step_delay': self.get_gymnasium_step_delay(),
