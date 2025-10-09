@@ -27,8 +27,10 @@ epics:
 
 gymnasium:
   environment: "MountainCarContinuous-v0"
-  input_topic: "gymnasium-action"
-  output_topic: "gymnasium-output"
+  output_topics:
+    sarsa: "gymnasium-sarsa"
+    state: "gymnasium-state"
+    decomposed: "gymnasium-output"
   blocking_mode: false
   default_action_strategy: "random"
   step_delay: 0.1
