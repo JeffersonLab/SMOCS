@@ -84,7 +84,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.samples_multiplier = config.get('samples_multiplier', 10)
         self.epochs = config.get('epochs', 50)
         self.anomaly_threshold_type = config.get('anomaly_threshold_type', 'fixed')
-        self.anomaly_threshold = 0.02
+
+        if self.anomaly_threshold_type == 'percentile':
+            self.threshold_precentile = config.get('threshold_percentile', 95.0)
+        else:
+            self.fixed_anomaly_threshold = config.get('threshold', 0.02)
+            
         
         # Model state
         self.model = None
@@ -267,9 +272,9 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         if len(errors) == 0:
             return self.anomaly_threshold
         if self.anomaly_threshold_type == 'percentile':
-            threshold = float(np.percentile(errors, percentile))
+            threshold = float(np.percentile(errors, self.threshold_precentile))
         else:
-            threshold = 0.02 # Default fixed threshold if unknown type
+            threshold = self.fixed_anomaly_threshold # Default fixed threshold if unknown type
         return threshold
     
     def eval_model(self) -> Dict[str, Any]:
