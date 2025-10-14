@@ -27,7 +27,6 @@ COPY orchestration/containers/agent/*-requirements.txt ./
 
 # Copy entrypoint script
 COPY orchestration/containers/agent/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
 # Copy the entire smocs package and config
 COPY smocs ./smocs
@@ -38,3 +37,4 @@ COPY orchestration/containers/agent/init.sql /docker-entrypoint-initdb.d/init.sq
 
 # Set Python path
 ENV PYTHONPATH=/app
+RUN chmod +x /entrypoint.sh
