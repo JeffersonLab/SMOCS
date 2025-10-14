@@ -158,7 +158,7 @@ services:
     environment:
       AGENT_TYPE: autoencoder
       AGENT_CONFIG: autoencoder_agent1
-      SMOCS_LOG_LEVEL: DEBUG
+      SMOCS_LOG_LEVEL: INFO
     ports:
       - "3307:3306"
     volumes:
@@ -170,7 +170,7 @@ services:
     environment:
       AGENT_TYPE: autoencoder
       AGENT_CONFIG: autoencoder_agent2
-      SMOCS_LOG_LEVEL: DEBUG
+      SMOCS_LOG_LEVEL: INFO
     ports:
       - "3305:3305"
     volumes:
