@@ -51,9 +51,9 @@ autoencoder_agent1:
     - bounds_normalizer
     - window_processor
   # For no preprocessing, use: preprocessing_pipeline: []
-  window_size: 20
+  window_size: 5
   min_training_samples: 100
-  encoder_dims: [32, 16]
+  encoder_dims: [64, 32, 16]
   learning_rate: 0.0001
   batch_size: 16
   samples_multiplier: 3
@@ -84,9 +84,9 @@ autoencoder_agent2:
     - bounds_normalizer
     - window_processor
   # For no preprocessing, use: preprocessing_pipeline: []
-  window_size: 20
+  window_size: 5
   min_training_samples: 100
-  encoder_dims: [32, 16]
+  encoder_dims: [64, 32, 16]
   learning_rate: 0.0001
   batch_size: 16
   samples_multiplier: 3
