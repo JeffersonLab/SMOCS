@@ -6,6 +6,7 @@ import logging
 import traceback
 import numpy as np
 import pickle
+import argparse
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import tensorflow as tf
@@ -82,6 +83,13 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.batch_size = config.get('batch_size', 32)
         self.samples_multiplier = config.get('samples_multiplier', 10)
         self.epochs = config.get('epochs', 50)
+        self.anomaly_threshold_type = config.get('anomaly_threshold_type', 'fixed')
+
+        if self.anomaly_threshold_type == 'percentile':
+            self.threshold_precentile = config.get('threshold_percentile', 95.0)
+        else:
+            self.fixed_anomaly_threshold = config.get('threshold', 0.02)
+            
         
         # Model state
         self.model = None
@@ -249,6 +257,25 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             logging.error(f"AEMLTrainingThread: Error training model: {e}")
             logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}")
             return {'error': str(e)}
+        
+    def get_anomaly_threshold(self, errors: np.ndarray, percentile: float = 95.0) -> float:
+        """
+        Calculate anomaly detection threshold based on reconstruction errors.
+        
+        Args:
+            errors: Array of reconstruction errors
+            percentile: Percentile to use for threshold (default 95.0)
+            
+        Returns:
+            Threshold value
+        """
+        if len(errors) == 0:
+            return self.anomaly_threshold
+        if self.anomaly_threshold_type == 'percentile':
+            threshold = float(np.percentile(errors, self.threshold_precentile))
+        else:
+            threshold = self.fixed_anomaly_threshold # Default fixed threshold if unknown type
+        return threshold
     
     def eval_model(self) -> Dict[str, Any]:
         """
@@ -291,7 +318,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                         'mean_reconstruction_error': float(np.mean(mse_errors)),
                         'std_reconstruction_error': float(np.std(mse_errors)),
                         'max_reconstruction_error': float(np.max(mse_errors)),
-                        'anomaly_threshold_95': float(np.percentile(mse_errors, 95)),
+                        'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
                         'eval_samples': len(eval_subset),
                         'mean_denormalized_error': float(np.mean(denorm_errors)),
                         'sample_original_range': [float(np.min(sample_original)), float(np.max(sample_original))],
@@ -303,7 +330,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                         'mean_reconstruction_error': float(np.mean(mse_errors)),
                         'std_reconstruction_error': float(np.std(mse_errors)),
                         'max_reconstruction_error': float(np.max(mse_errors)),
-                        'anomaly_threshold_95': float(np.percentile(mse_errors, 95)),
+                        'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
                         'eval_samples': len(eval_subset)
                     }
                 
@@ -313,7 +340,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                     'mean_reconstruction_error': float(np.mean(mse_errors)),
                     'std_reconstruction_error': float(np.std(mse_errors)),
                     'max_reconstruction_error': float(np.max(mse_errors)),
-                    'anomaly_threshold_95': float(np.percentile(mse_errors, 95)),
+                    'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
                     'eval_samples': len(eval_subset)
                 }
             
@@ -811,13 +838,16 @@ class AutoencoderAgent(AgentBase):
     Autoencoder agent for time series anomaly detection.
     """
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, config_key: str = None):
         super().__init__("AutoencoderAgent")
         
         # Load configuration
         if config_path:
             config_loader = ConfigLoader(config_path)
-            autoencoder_config = config_loader.config.get('autoencoder_agent', {})
+            if config_key is None:
+                config_key = "autoencoder_agent"
+            autoencoder_config = config_loader.config.get(config_key, {})
+            
             # Get enabled threads directly from config
             self.enabled_threads = autoencoder_config.get('enabled_threads', ['ingest', 'training', 'inference'])
         else:
@@ -874,12 +904,17 @@ class AutoencoderAgent(AgentBase):
 
 def main():
     """Main entry point for autoencoder agent."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--agent_config_key", help="Key for agent configuration dict in the config file", type=str, default='autoencoder1')
+    args = parser.parse_args()
+    config_key = args.agent_config_key
+
     setup_logging()
     
     config_path = os.getenv('CONFIG_PATH', '/app/config.yaml')
     
     try:
-        agent = AutoencoderAgent(config_path)
+        agent = AutoencoderAgent(config_path, config_key)
         agent.start()
     except KeyboardInterrupt:
         logging.info("Shutting down autoencoder agent...")
