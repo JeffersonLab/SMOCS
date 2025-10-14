@@ -7,11 +7,14 @@ class IndustryParticleAcceleratorEnv(gym.Env):
     
     def __init__(self, gym_space_type=None):
 
-        self.gym_space_type = gym_space_type        
+        if gym_space_type is None:
+            self.gym_space_type = 'array'
+        else:
+            self.gym_space_type = gym_space_type.lower()        
         
         # Define action space: continuous values for beam energy adjustment and conveyor speed
         #  Beam Energy Level and Conveyor Speed can vary between 0.5 (low) and 2.0 (high)
-        if self.gym_space_type.lower() == 'dict':
+        if self.gym_space_type == 'dict':
             # Define the action space using a dictionary
             self.action_space = gym.spaces.Dict({
                 "beam_energy_change": gym.spaces.Box(low=-0.5, high=0.5, shape=(1,), dtype=np.float32),
@@ -22,7 +25,7 @@ class IndustryParticleAcceleratorEnv(gym.Env):
 
         # Define observation space: continuous values for beam energy level, dose accumulated,
         # leakage level, and conveyor speed
-        if self.gym_space_type.lower() == 'dict':
+        if self.gym_space_type == 'dict':
             # Define the action space using a dictionary
             self.observation_space = gym.spaces.Dict({
                 "beam_energy": gym.spaces.Box(low=-0.5, high=2.0, shape=(1,), dtype=np.float32),
@@ -53,7 +56,7 @@ class IndustryParticleAcceleratorEnv(gym.Env):
         self.conveyor_speed = 1.0
         self.step_count = 0
 
-        if self.gym_space_type.lower() == 'dict':
+        if self.gym_space_type == 'dict':
             state = {
                 "beam_energy": np.array([self.beam_energy_level]),
                 "dose_accumulation": np.array([self.dose_accumulated]),
@@ -69,7 +72,7 @@ class IndustryParticleAcceleratorEnv(gym.Env):
         """Take an action and observe the result."""
         
         # Apply actions to adjust beam energy level and conveyor speed
-        if self.gym_space_type.lower() == 'dict':
+        if self.gym_space_type == 'dict':
             beam_energy_adjustment = action["beam_energy_change"]
             speed_adjustment = action["conveyor_speed_change"]
         else:
@@ -79,7 +82,7 @@ class IndustryParticleAcceleratorEnv(gym.Env):
         self.conveyor_speed += speed_adjustment
 
         # Ensure state variables remain within bounds
-        if self.gym_space_type.lower() == 'dict':
+        if self.gym_space_type == 'dict':
             self.beam_energy_level = np.clip(self.beam_energy_level,
                                              self.observation_space['beam_energy'].low[0],
                                              self.observation_space['beam_energy'].high[0])
@@ -102,7 +105,7 @@ class IndustryParticleAcceleratorEnv(gym.Env):
         leakage_change = (self.beam_energy_level / 2) - 0.1
         self.leakage_level += leakage_change
 
-        if self.gym_space_type.lower() == 'dict':
+        if self.gym_space_type == 'dict':
             self.beam_energy_level = np.clip(self.leakage_level,
                                              self.observation_space['radiation_leakage_level'].low[0],
                                              self.observation_space['radiation_leakage_level'].high[0])
@@ -123,7 +126,7 @@ class IndustryParticleAcceleratorEnv(gym.Env):
             else:
                 reward -= 50  # penalty for failing to meet requirements or safety
 
-        if self.gym_space_type.lower() == 'dict':
+        if self.gym_space_type == 'dict':
             observation = {
                 "beam_energy": np.array([self.beam_energy_level]),
                 "dose_accumulation": np.array([self.dose_accumulated]),
