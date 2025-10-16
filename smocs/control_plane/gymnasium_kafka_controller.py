@@ -8,12 +8,7 @@ import smocs.control_plane
 import gymnasium as gym
 
 from smocs.cores import KafkaStreamingProcessBase
-from smocs.utils import ConfigLoader
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from smocs.utils import ConfigLoader, setup_logging
 
 
 class KafkaGymWrapper(KafkaStreamingProcessBase):
@@ -148,6 +143,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         """
         Parse action from Kafka message.
         
+        Accepts two formats:
+        1. {"channels": {"action": [...]}, "timestamp": ...}  (preferred)
+        2. {"action": [...], "timestamp": ...}  (legacy)
+        
         Args:
             message: JSON string containing action data
             
@@ -161,16 +160,27 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             data = json.loads(message)
             
             # Handle different message formats
-            if 'action' in data:
+            # Format 1: Channels format (preferred for consistency)
+            if 'channels' in data and isinstance(data['channels'], dict):
+                if 'action' in data['channels']:
+                    action = data['channels']['action']
+                else:
+                    raise ValueError(f"No 'action' field found in channels: {data}")
+            # Format 2: Direct action field (legacy)
+            elif 'action' in data:
                 action = data['action']
+            # Format 3: Raw list/scalar (legacy)
             elif isinstance(data, (list, int, float)):
                 action = data
             else:
                 raise ValueError(f"No 'action' field found in message: {data}")
             
-            # Convert to numpy array if needed for continuous spaces
-            if hasattr(self.env.action_space, 'shape') and isinstance(action, list):
-                action = np.array(action)
+            # Convert to numpy array with correct dtype for continuous spaces
+            if hasattr(self.env.action_space, 'shape'):
+                if not isinstance(action, np.ndarray):
+                    action = np.array(action, dtype=np.float32)
+                elif action.dtype != np.float32:
+                    action = action.astype(np.float32)
             
             # Validate action is in action space
             if not self.env.action_space.contains(action):
@@ -492,13 +502,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         try:
             logging.info("Starting Kafka Gym wrapper...")
             
-            # Reset environment if configured to do so
-            if self.reset_on_start:
-                self.current_obs, info = self.env.reset()
-                logging.info("Environment reset on startup")
-                # Send initial state immediately after reset
-                self.send_state_message(self.current_obs)
-            
             # Call parent start method which sets up Kafka and begins consumption
             super().start()
             
@@ -516,6 +519,14 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         """
         logging.info(f"Starting Kafka Gym wrapper loop (blocking_mode={self.blocking_mode})...")
         
+        # Reset environment if configured to do so
+        if self.reset_on_start:
+            self.current_obs, info = self.env.reset()
+            logging.info("Environment reset on startup")
+            # Send initial state immediately after reset
+            self.send_state_message(self.current_obs)
+
+
         while self.running:
             try:
                 # Poll for messages with timeout
@@ -591,6 +602,9 @@ def main():
     """
     Main entry point for the Gymnasium Kafka controller.
     """
+
+    setup_logging()
+
     logging.info("Starting Gymnasium Kafka Controller...")
     
     try:
