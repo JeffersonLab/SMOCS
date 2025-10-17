@@ -29,31 +29,29 @@ epics:
       - IPMK401.PHAS
       
 gymnasium:
-  environment: "SCORE-IndustryParticleAccelerator-v0"
+  environment: "Pendulum-v1"
   input_topic: "gymnasium-action"
   output_topics:
     sarsa: "gymnasium-sarsa"
     state: "gymnasium-state"
     decomposed: "gymnasium-output"
-  blocking_mode: false
+  blocking_mode: true  # Must be true for RL agent
   default_action_strategy: "random"
-  step_delay: 0.1
+  step_delay: 0.0
   reset_on_start: true
-  max_episode_steps: 10000000  # null uses environment default
-  render_mode: null        # "human", "rgb_array", or null
+  max_episode_steps: 200
+  render_mode: null
 
 kafka:
   auto_create: true
   partitions: 1
   replication_factor: 1
 
-# Autoencoders for industry environment
+# Autoencoder agents (existing)
 autoencoder_agent1:
-  # Explicit preprocessing pipeline - executed in order
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  # For no preprocessing, use: preprocessing_pipeline: []
   window_size: 5
   min_training_samples: 100
   encoder_dims: [64, 32, 16]
@@ -66,27 +64,25 @@ autoencoder_agent1:
       channels:
       - state_0
       - state_1
-      
+      - state_2
       bounds:
-      - [0.5, 2.0]
-      - [0.0, 1000.0]
-      
+      - [-1.0, 1.0]
+      - [-1.0, 1.0]
+      - [-8.0, 8.0]
   model_output:
       channels:
       - state_0
       - state_1
-
+      - state_2
   kafka_topics:
     input: "gymnasium-output"
     output: "autoencoder1-anomalies"
     training_output: "autoencoder1-training-results"
 
 autoencoder_agent2:
-  # Explicit preprocessing pipeline - executed in order
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  # For no preprocessing, use: preprocessing_pipeline: []
   window_size: 5
   min_training_samples: 100
   encoder_dims: [64, 32, 16]
@@ -98,21 +94,56 @@ autoencoder_agent2:
   model_input:
       channels:
       - state_2
-      - state_3
-      
       bounds:
-      - [0.0, 1.0]
-      - [0.5, 2.0]
-      
+      - [-8.0, 8.0]
   model_output:
       channels:
       - state_2
-      - state_3
-
   kafka_topics:
     input: "gymnasium-output"
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
 
+# RL Control Agent Configuration
+rl_control_agent1:
+  # Environment configuration
+  environment: "Pendulum-v1"
+  
+  # JLab agent configuration
+  jlab_agent_type: "KerasTD3-v0"
+  jlab_agent_config_path: "/app/jlab_configs/keras_td3.cfg"
+  
+  # Buffer configuration
+  buffer_type: "ER-v0"
+  buffer_size: 100000
+  
+  # Thread configuration
+  enabled_threads: ['ingest', 'training', 'inference']
+  
+  # Kafka topics (must match gymnasium wrapper output)
+  kafka_topics:
+    input_sarsa: "gymnasium-sarsa"
+    input_state: "gymnasium-state"
+    output_action: "gymnasium-action"
+
+  # Thread configs  
+  data_ingest:
+    use_pipeline_sync: true
+    pipeline_timeout_sec: 100.0
+  
+  training:
+    check_interval_ms: 10
+    use_pipeline_sync: true
+    pipeline_timeout_sec: 100.0
+  
+  inference:
+    train_mode: true
+    use_pipeline_sync: true
+    pipeline_timeout_sec: 100.0
+    log_lock_wait_threshold_ms: 100
+  
+  # Logging directory
+  logdir: "./logs/rl_agent1"
+
 project:
-  name: "smocs-gymnasium-proxy-accelerator"
+  name: "smocs-gymnasium-rl-control"
