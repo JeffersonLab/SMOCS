@@ -107,6 +107,8 @@ services:
       - kafka-net
     restart: unless-stopped
     command: ["python", "-m", "smocs.control_plane.gymnasium_kafka_controller"]
+    volumes:
+    - ./tb-logs:/app/logs:rw
 
   influxdb-consumer:
     build:
@@ -189,7 +191,7 @@ services:
     volumes:
       - mysql-data-rl1:/var/lib/mysql
       - jlab-configs:/app/jlab_configs:ro  # Read-only mount for jlab configs
-      - ./rl-logs-1:/app/logs:rw  # Mount for RL agent logs and models
+      - ./tb-logs:/app/logs:rw  # Mount for RL agent logs and models
     depends_on:
       kafka-broker:
         condition: service_healthy
