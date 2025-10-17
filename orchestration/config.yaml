@@ -29,18 +29,27 @@ epics:
       - IPMK401.PHAS
       
 gymnasium:
-  environment: "SCORE-IndustryParticleAccelerator-v0"
+  # Environment settings
+  environment: "Pendulum-v1"
+  render_mode: null  # Options: null, 'human', 'rgb_array'
+  max_episode_steps: null  # null uses environment default
+  
+  # Kafka topics
   input_topic: "gymnasium-action"
   output_topics:
     sarsa: "gymnasium-sarsa"
     state: "gymnasium-state"
-    decomposed: "gymnasium-output"
-  blocking_mode: false
-  default_action_strategy: "random"
-  step_delay: 0.1
-  reset_on_start: true
-  max_episode_steps: 10000000  # null uses environment default
-  render_mode: null        # "human", "rgb_array", or null
+    decomposed: "gymnasium-decomposed"
+  
+  # Operation mode
+  blocking_mode: false  # true = wait for Kafka actions, false = use default actions
+  default_action_strategy: "random"  # Options: 'random', 'zero'
+  step_delay: 0.0  # Delay in seconds between steps
+  reset_on_start: true  # Reset environment on startup
+  
+  # TensorBoard logging directory
+  # This will create a 'metrics' subdirectory inside
+  logdir: "./logs/env"  # Will create ./logs/env/metrics for TensorBoard
 
 kafka:
   auto_create: true

@@ -107,6 +107,8 @@ services:
       - kafka-net
     restart: unless-stopped
     command: ["python", "-m", "smocs.control_plane.gymnasium_kafka_controller"]
+    volumes:
+    - ./tb-logs:/app/logs:rw
 
   influxdb-consumer:
     build:
