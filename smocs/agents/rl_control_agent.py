@@ -220,7 +220,7 @@ class RLDataIngestThread(KafkaConsumerBase):
             next_state = np.array(next_state, dtype=np.float32)
             
             # Combine done and truncated into single done flag
-            done = bool(done or truncated)
+            done = bool(done)
             
             # Validate shapes
             if state.ndim != 1 or next_state.ndim != 1:
@@ -236,7 +236,6 @@ class RLDataIngestThread(KafkaConsumerBase):
         except Exception as e:
             logging.error(f"RLDataIngestThread: Error parsing SARSA message: {e}")
             return None
-
 
 class RLTrainingThread(MLTrainingThreadBase):
     """
