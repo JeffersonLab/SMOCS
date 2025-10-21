@@ -11,7 +11,7 @@ from datetime import datetime
 
 # SMOCS imports
 from smocs.cores import AgentBase, KafkaConsumerBase, MLTrainingThreadBase, KafkaStreamingProcessBase
-from smocs.utils import ConfigLoader, setup_logging
+from smocs.utils import ConfigLoader, setup_logging, base64_to_numpy, is_encoded_numpy, decode_base64_json, numpy_to_base64, is_encoded_numpy
 
 # JLab opt control imports
 import jlab_opt_control.agents
@@ -87,19 +87,30 @@ class RLDataIngestThread(KafkaConsumerBase):
         Returns:
             bool: True if processing was successful
         """
+        logging.info(f"[INGESTION-RECV] Received SARSA message at offset {offset}")
         try:
             # Wait for inference to complete before processing SARSA
             if self.use_pipeline_sync:
-                logging.info("RLDataIngestThread: Waiting for inference to complete...")
+                logging.info("=" * 80)
+                logging.info("PIPELINE STEP 2: DATA INGESTION - Waiting for inference to complete...")
+                logging.info(f"RLDataIngestThread: inference_done_event.is_set() = {self.inference_done_event.is_set()}")
+                
+                wait_start = time.time()
                 if not self.inference_done_event.wait(timeout=self.pipeline_timeout):
                     self.pipeline_wait_timeouts += 1
                     logging.warning(f"RLDataIngestThread: Timeout waiting for inference "
                                   f"(total timeouts: {self.pipeline_wait_timeouts})")
                     return False
                 
+                wait_duration = time.time() - wait_start
+                logging.info(f"PIPELINE STEP 2: DATA INGESTION - Inference complete (waited {wait_duration:.3f}s)")
+                
                 # Clear the inference_done event so we wait next time
                 self.inference_done_event.clear()
-                logging.info("RLDataIngestThread: Inference complete, proceeding with ingestion")
+                logging.info("PIPELINE STEP 2: DATA INGESTION - Cleared inference_done_event, proceeding with ingestion")
+                
+                # Small sleep to ensure log ordering
+                time.sleep(0.01)
             
             # Parse message
             if isinstance(message, bytes):
@@ -122,8 +133,13 @@ class RLDataIngestThread(KafkaConsumerBase):
             
             # Signal that ingestion is done
             if result and self.use_pipeline_sync:
+                logging.info("PIPELINE STEP 2: DATA INGESTION - Successfully saved SARSA to buffer")
+                logging.info(f"PIPELINE STEP 2: DATA INGESTION - Setting ingestion_done_event (experiences stored: {self.experiences_stored})")
                 self.ingestion_done_event.set()
-                logging.info("RLDataIngestThread: Ingestion complete, signaling training")
+                logging.info("=" * 80)
+                
+                # Small sleep to ensure log ordering
+                time.sleep(0.01)
             
             return result
             
@@ -139,6 +155,17 @@ class RLDataIngestThread(KafkaConsumerBase):
         """ Function to save the SARSA tuple to the agents buffer, returns True is successful else error out """
         
         state, action, reward, next_state, done = sarsa_tuple
+
+        # if self.experiences_stored < 5:
+        logging.info(f"SARSA Tuple #{self.experiences_stored}:")
+        logging.info(f"  State: {state}")
+        logging.info(f"  Action: {action}")
+        logging.info(f"  Reward: {reward:.3f}")
+        logging.info(f"  Next_State: {next_state}")
+        logging.info(f"  Done: {done}")
+        logging.info(f"  State vs Next_State diff: {np.linalg.norm(next_state - state):.3f}")
+    
+
         try:    
             # Acquire lock and store to buffer
             lock_wait_start = time.time()
@@ -168,15 +195,15 @@ class RLDataIngestThread(KafkaConsumerBase):
         
     def _parse_sarsa_message(self, message_data: Dict[str, Any]) -> Optional[Tuple]:
         """
-        Parse SARSA tuple from Kafka message.
+        Parse SARSA tuple from Kafka message with base64-encoded numpy arrays.
 
         Expected SARSA message format from Gymnasium wrapper:
         {
             "channels": {
-                "state": [...],
-                "action": [...],
+                "state": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]},
+                "action": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]},
                 "reward": float,
-                "next_state": [...],
+                "next_state": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]},
                 "done": bool,
                 "truncated": bool,
                 ...
@@ -190,7 +217,6 @@ class RLDataIngestThread(KafkaConsumerBase):
         Returns:
             Tuple of (state, action, reward, next_state, done) or None if parsing fails
         """
-
         try:
             channels = message_data.get('channels', {})
             
@@ -199,28 +225,35 @@ class RLDataIngestThread(KafkaConsumerBase):
                 return None
             
             # Extract components
-            state = channels.get('state')
-            action = channels.get('action')
+            state_encoded = channels.get('state')
+            action_encoded = channels.get('action')
             reward = channels.get('reward')
-            next_state = channels.get('next_state')
+            next_state_encoded = channels.get('next_state')
             done = channels.get('done', False)
             truncated = channels.get('truncated', False)
             
             # Validate all components exist
-            if state is None or action is None or reward is None or next_state is None:
+            if state_encoded is None or action_encoded is None or reward is None or next_state_encoded is None:
                 logging.error("RLDataIngestThread: Missing required SARSA components")
-                logging.error(f"RLDataIngestThread: state: {state is not None}, action: {action is not None}, "
-                           f"reward: {reward is not None}, next_state: {next_state is not None}")
+                logging.error(f"RLDataIngestThread: state: {state_encoded is not None}, action: {action_encoded is not None}, "
+                           f"reward: {reward is not None}, next_state: {next_state_encoded is not None}")
                 return None
             
-            # Convert to numpy arrays (JSON removes all data formats)
-            state = np.array(state, dtype=np.float32)
-            action = np.array(action, dtype=np.float32)
+            # Decode base64-encoded numpy arrays
+            try:
+                state = base64_to_numpy(state_encoded)
+                action = base64_to_numpy(action_encoded)
+                next_state = base64_to_numpy(next_state_encoded)
+            except Exception as e:
+                logging.error(f"RLDataIngestThread: Error decoding numpy arrays: {e}")
+                logging.error(f"RLDataIngestThread: state type: {type(state_encoded)}, action type: {type(action_encoded)}")
+                return None
+            
+            # Convert reward to float
             reward = float(reward)
-            next_state = np.array(next_state, dtype=np.float32)
             
             # Combine done and truncated into single done flag
-            done = bool(done)
+            done = bool(done or truncated)
             
             # Validate shapes
             if state.ndim != 1 or next_state.ndim != 1:
@@ -231,10 +264,25 @@ class RLDataIngestThread(KafkaConsumerBase):
                 logging.error(f"RLDataIngestThread: Invalid action dimension: {action.shape}")
                 return None
             
+            # Validate dtypes are preserved
+            if state.dtype != np.float32:
+                logging.warning(f"RLDataIngestThread: State dtype is {state.dtype}, expected float32. Converting...")
+                state = state.astype(np.float32)
+            
+            if action.dtype != np.float32:
+                logging.warning(f"RLDataIngestThread: Action dtype is {action.dtype}, expected float32. Converting...")
+                action = action.astype(np.float32)
+                
+            if next_state.dtype != np.float32:
+                logging.warning(f"RLDataIngestThread: Next_state dtype is {next_state.dtype}, expected float32. Converting...")
+                next_state = next_state.astype(np.float32)
+            
             return (state, action, reward, next_state, done)
             
         except Exception as e:
             logging.error(f"RLDataIngestThread: Error parsing SARSA message: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
             return None
 
 class RLTrainingThread(MLTrainingThreadBase):
@@ -293,7 +341,11 @@ class RLTrainingThread(MLTrainingThreadBase):
             try:
                 if self.use_pipeline_sync:
                     # Wait for ingestion to complete before training
-                    logging.info("RLTrainingThread: Waiting for ingestion to complete...")
+                    logging.info("=" * 80)
+                    logging.info("PIPELINE STEP 3: TRAINING - Waiting for ingestion to complete...")
+                    logging.info(f"RLTrainingThread: ingestion_done_event.is_set() = {self.ingestion_done_event.is_set()}")
+                    
+                    wait_start = time.time()
                     if not self.ingestion_done_event.wait(timeout=self.pipeline_timeout):
                         self.pipeline_wait_timeouts += 1
                         if self.pipeline_wait_timeouts % 10 == 0:
@@ -302,20 +354,34 @@ class RLTrainingThread(MLTrainingThreadBase):
                         time.sleep(self.check_interval_ms / 1000.0)
                         continue
                     
+                    wait_duration = time.time() - wait_start
+                    logging.info(f"PIPELINE STEP 3: TRAINING - Ingestion complete (waited {wait_duration:.3f}s)")
+                    
                     # Clear the ingestion_done event so we wait next time
                     self.ingestion_done_event.clear()
-                    logging.info("RLTrainingThread: Ingestion complete, proceeding with training")
+                    logging.info("PIPELINE STEP 3: TRAINING - Cleared ingestion_done_event, proceeding with training")
+                    
+                    # Small sleep to ensure log ordering
+                    time.sleep(0.01)
                     
                     # Acquire lock and train
+                    logging.info("PIPELINE STEP 3: TRAINING - Attempting to acquire agent lock...")
                     acquired = self.agent_lock.acquire(blocking=True, timeout=2.0)
                     
                     if acquired:
                         try:
+                            logging.info("PIPELINE STEP 3: TRAINING - Lock acquired, starting training...")
+                            train_start = time.time()
+                            
                             with self.tb_writer.as_default():
                                 self.jlab_agent.train()
                                 self.tb_writer.flush()
                             
+                            train_duration = time.time() - train_start
                             self.training_updates += 1
+                            
+                            logging.info(f"PIPELINE STEP 3: TRAINING - Training complete (duration: {train_duration:.3f}s, "
+                                       f"update #{self.training_updates}, buffer size: {self.jlab_agent.buffer.size()})")
                             
                             # Log periodically
                             if self.training_updates % 100 == 0:
@@ -325,10 +391,15 @@ class RLTrainingThread(MLTrainingThreadBase):
                         
                         finally:
                             self.agent_lock.release()
+                            logging.info("PIPELINE STEP 3: TRAINING - Released agent lock")
                         
                         # Signal that training is done
+                        logging.info("PIPELINE STEP 3: TRAINING - Setting training_done_event")
                         self.training_done_event.set()
-                        logging.info("RLTrainingThread: Training complete, signaling inference")
+                        logging.info("=" * 80)
+                        
+                        # Small sleep to ensure log ordering
+                        time.sleep(0.01)
                     else:
                         logging.warning("RLTrainingThread: Failed to acquire lock within timeout")
                 
@@ -421,50 +492,81 @@ class RLInferenceThread(KafkaStreamingProcessBase):
             # (For the first message, training_done is already set)
             # (For subsequent messages, this waits until the previous cycle completes)
             if self.use_pipeline_sync:
-                logging.info("RLInferenceThread: Waiting for training cycle to complete...")
+                logging.info("=" * 80)
+                logging.info("PIPELINE STEP 1: INFERENCE - Waiting for training cycle to complete...")
+                logging.info(f"RLInferenceThread: training_done_event.is_set() = {self.training_done_event.is_set()}")
+                
+                wait_start = time.time()
                 if not self.training_done_event.wait(timeout=self.pipeline_timeout):
                     self.pipeline_wait_timeouts += 1
                     logging.warning(f"RLInferenceThread: Timeout waiting for training "
                                 f"(total timeouts: {self.pipeline_wait_timeouts})")
                     return False, []
                 
+                wait_duration = time.time() - wait_start
+                logging.info(f"PIPELINE STEP 1: INFERENCE - Training complete (waited {wait_duration:.3f}s)")
+                
                 # DON'T clear it here yet!
-                logging.info("RLInferenceThread: Training complete, proceeding with inference")
+                logging.info("PIPELINE STEP 1: INFERENCE - Proceeding with inference (will clear training_done_event after)")
+                
+                # Small sleep to ensure log ordering
+                time.sleep(0.01)
             
             # Parse message
             if isinstance(message, bytes):
                 message = message.decode('utf-8')
+
+            logging.info(f"message raw {message}")
             
             message_data = json.loads(message)
+
+            logging.info(f"message data {message_data}")
             
             # Extract state
             state = self._parse_state_message(message_data)
+
+            logging.info(f"state parsed out of message {state}")
             
             if state is None:
                 logging.error("RLInferenceThread: Failed to parse state from message")
                 return False, []
             
             action_list = self._agent_action(state)
+
+            logging.info(f"action_list {action_list}")
             
             if action_list is None:
                 logging.error("RLInferenceThread: Failed to generate action")
                 return False, []
 
+            logging.info(f"PIPELINE STEP 1: INFERENCE - Generated action: {action_list[:3]}... (showing first 3 elements)")
+
             # Create output message in channels format for consistency
+            temp = numpy_to_base64(action_list)
+            logging.info(f"numpy_to_base64 action_list {temp}")
             output_message = {
                 'channels': {
-                    'action': action_list
+                    'action': temp
                 },
                 'timestamp': time.time()
             }
             
             # STEP 2: Signal that inference is done, THEN clear training_done
             if self.use_pipeline_sync:
+                logging.info(f"PIPELINE STEP 1: INFERENCE - Inference complete (action #{self.actions_generated})")
+                logging.info("PIPELINE STEP 1: INFERENCE - Setting inference_done_event")
                 self.inference_done_event.set()
-                logging.info("RLInferenceThread: Inference complete, signaling ingestion")
+                
+                # Small sleep to ensure log ordering
+                time.sleep(0.01)
                 
                 # NOW clear training_done_event so we wait for the next cycle
+                logging.info("PIPELINE STEP 1: INFERENCE - Clearing training_done_event (ready for next cycle)")
                 self.training_done_event.clear()
+                logging.info("=" * 80)
+                
+                # Small sleep to ensure log ordering
+                time.sleep(0.01)
             
             # Log periodically
             if self.actions_generated % 100 == 0:
@@ -490,28 +592,46 @@ class RLInferenceThread(KafkaStreamingProcessBase):
         """Input state, generate action list by calling SOCT agent"""
         try:
             # Acquire lock and generate action
+            logging.info("PIPELINE STEP 1: INFERENCE - Attempting to acquire agent lock...")
             lock_wait_start = time.time()
             with self.agent_lock:
                 lock_wait_time = time.time() - lock_wait_start
                 self.lock_wait_times.append(lock_wait_time)
+                
+                logging.info(f"PIPELINE STEP 1: INFERENCE - Lock acquired (wait time: {lock_wait_time:.3f}s)")
                 
                 if lock_wait_time > (self.log_lock_wait_threshold_ms / 1000.0):
                     logging.warning(f"RLInferenceThread: Lock wait time: {lock_wait_time:.3f}s")
                 
                 state_tensor = tf.convert_to_tensor(state, dtype=tf.float32)
                 
+                action_start = time.time()
                 with self.tb_writer.as_default():
                     action, _ = self.jlab_agent.action(state_tensor, train=self.train_mode)
                     self.tb_writer.flush()
                 
+                action_duration = time.time() - action_start
                 self.actions_generated += 1
+                
+                logging.info(f"PIPELINE STEP 1: INFERENCE - Action generated (duration: {action_duration:.3f}s)")
             
-            # Convert action to list for JSON serialization
-            action_list = action.numpy().tolist() if hasattr(action, 'numpy') else (action.tolist() if isinstance(action, np.ndarray) else list(action))
+            logging.info("PIPELINE STEP 1: INFERENCE - Released agent lock")
             
-            logging.debug(f"RLInferenceThread: Action list: {action_list}")
+            # Convert action to numpy array if needed
+            if hasattr(action, 'numpy'):
+                action_array = action.numpy()
+            elif isinstance(action, np.ndarray):
+                action_array = action
+            else:
+                action_array = np.array(action, dtype=np.float32)
+            
+            # Ensure it's float32
+            if action_array.dtype != np.float32:
+                action_array = action_array.astype(np.float32)
+            
+            logging.debug(f"RLInferenceThread: Action array shape: {action_array.shape}, dtype: {action_array.dtype}")
 
-            return action_list
+            return action_array
         
         except Exception as e:
             logging.error(f"RLInferenceThread: Error performing agent action: {e}")
@@ -519,12 +639,12 @@ class RLInferenceThread(KafkaStreamingProcessBase):
 
     def _parse_state_message(self, message_data: Dict[str, Any]) -> Optional[np.ndarray]:
         """
-        Parse state from Kafka message.
+        Parse state from Kafka message with base64-encoded numpy array.
         
         Expected message format from Gymnasium wrapper:
         {
             "channels": {
-                "state": [...]
+                "state": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]}
             },
             "timestamp": float
         }
@@ -542,24 +662,36 @@ class RLInferenceThread(KafkaStreamingProcessBase):
                 logging.error("RLInferenceThread: No 'channels' field in message")
                 return None
             
-            state = channels.get('state')
+            state_encoded = channels.get('state')
             
-            if state is None:
+            if state_encoded is None:
                 logging.error("RLInferenceThread: No 'state' field in channels")
                 return None
             
-            # Convert to numpy array
-            state = np.array(state, dtype=np.float32)
+            # Decode base64-encoded numpy array
+            try:
+                state = base64_to_numpy(state_encoded)
+            except Exception as e:
+                logging.error(f"RLInferenceThread: Error decoding state: {e}")
+                logging.error(f"RLInferenceThread: state_encoded type: {type(state_encoded)}")
+                return None
             
             # Validate dimensions (only using BOX for now)
             if state.ndim != 1:
                 logging.error(f"RLInferenceThread: Invalid state dimension: {state.shape}, expected 1D array")
                 return None
             
+            # Validate dtype
+            if state.dtype != np.float32:
+                logging.warning(f"RLInferenceThread: State dtype is {state.dtype}, expected float32. Converting...")
+                state = state.astype(np.float32)
+            
             return state
             
         except Exception as e:
             logging.error(f"RLInferenceThread: Error parsing state message: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
             return None
 
 class RLControlAgent(AgentBase):
@@ -628,6 +760,12 @@ class RLControlAgent(AgentBase):
         
         # Set training_done initially so inference can start first
         self.training_done_event.set()
+        
+        logging.info("=" * 80)
+        logging.info("PIPELINE INITIALIZATION COMPLETE")
+        logging.info("Initial state: training_done_event is SET (inference can start)")
+        logging.info("Expected order: INFERENCE -> INGESTION -> TRAINING -> INFERENCE -> ...")
+        logging.info("=" * 80)
         
         logging.info(f"RLControlAgent: Agent {self.agent_id} initialized successfully")
     

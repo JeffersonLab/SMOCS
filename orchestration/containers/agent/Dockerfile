@@ -43,14 +43,16 @@ RUN git clone https://github.com/JeffersonLab/SciOptControlToolkit.git /tmp/jlab
     pip3 install --no-cache-dir -e . && \
     mkdir -p /app/jlab_configs_default && \
     cp -r /tmp/jlab/jlab_opt_control/cfgs/* /app/jlab_configs_default/ && \
-    cd / && \
-    rm -rf /tmp/jlab/.git
+    cd /
 
 # Copy all agent-specific requirements files
 COPY orchestration/containers/agent/*-requirements.txt ./
 
 # Copy entrypoint script
 COPY orchestration/containers/agent/entrypoint.sh /entrypoint.sh
+
+# Copy JLab standalone entrypoint script
+COPY orchestration/containers/agent/jlab-standalone-entrypoint.sh /jlab-standalone-entrypoint.sh
 
 # Copy the entire smocs package and config
 COPY smocs ./smocs
@@ -66,3 +68,4 @@ COPY orchestration/containers/agent/init.sql /docker-entrypoint-initdb.d/init.sq
 ENV PYTHONPATH=/app
 
 RUN chmod +x /entrypoint.sh
+RUN chmod +x /jlab-standalone-entrypoint.sh
