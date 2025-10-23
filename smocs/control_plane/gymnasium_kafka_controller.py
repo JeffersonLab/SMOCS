@@ -9,7 +9,7 @@ from typing import List, Tuple, Union, Callable, Any
 
 import smocs.control_plane
 from smocs.cores import KafkaStreamingProcessBase
-from smocs.utils import ConfigLoader, setup_logging, convert_for_base64_json, decode_base64_json, is_encoded_numpy
+from smocs.utils import ConfigLoader, setup_logging
 
 class KafkaGymWrapper(KafkaStreamingProcessBase):
     """
@@ -173,12 +173,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def parse_action(self, message: str):
         """
-        Parse action from Kafka message, handling base64-encoded numpy arrays.
+        Parse action from Kafka message, handling numpy arrays.
         
-        Accepts formats:
-        1. {"channels": {"action": <base64-encoded>}, "timestamp": ...}  (preferred)
-        2. {"action": <base64-encoded>, "timestamp": ...}  (legacy)
-        3. {"action": [...], "timestamp": ...}  (legacy list format)
+        Accepts:
+        1. {"channels": {"action": ...}, "timestamp": ...} 
         
         Args:
             message: JSON string containing action data
@@ -193,30 +191,16 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             
             data = json.loads(message)
             
-            # Handle different message formats
-            # Format 1: Channels format (preferred for consistency)
+            # Extract action from channels
             if 'channels' in data and isinstance(data['channels'], dict):
                 if 'action' in data['channels']:
                     action = data['channels']['action']
                 else:
                     raise ValueError(f"No 'action' field found in channels: {data}")
-            # Format 2: Direct action field (legacy)
-            elif 'action' in data:
-                action = data['action']
-            # Format 3: Raw list/scalar (legacy)
-            elif isinstance(data, (list, int, float)):
-                action = data
             else:
-                raise ValueError(f"No 'action' field found in message: {data}")
+                raise ValueError(f"No 'channels' field found in message formatted properly: {data}")
             
-            # Decode if base64-encoded
-            if is_encoded_numpy(action):
-                action = decode_base64_json(action)
-            elif isinstance(action, list):
-                # Legacy list format - convert to numpy
-                action = np.array(action, dtype=np.float32)
             
-            # Convert to numpy array with correct dtype for continuous spaces
             if hasattr(self.env.action_space, 'shape'):
                 if not isinstance(action, np.ndarray):
                     action = np.array(action, dtype=np.float32)
@@ -236,8 +220,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def convert_for_json(self, obj):
         """
-        Convert numpy arrays and types to JSON-serializable formats using base64 encoding.
-        This preserves full precision of numpy arrays.
+        Convert numpy arrays and types to JSON-serializable formats.
         
         Args:
             obj: Object to convert
@@ -245,7 +228,16 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         Returns:
             JSON-serializable version of obj
         """
-        return convert_for_base64_json(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        elif isinstance(obj, dict):
+            return {k: self.convert_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self.convert_for_json(item) for item in obj]
+        else:
+            return obj
     
     def log_step_metrics(self, action, reward):
         """
