@@ -1,10 +1,11 @@
+import os
+import time
 import json
 import logging
-import time
-import os
 import numpy as np
 import tensorflow as tf
 import gymnasium as gym
+from datetime import datetime
 from typing import List, Tuple, Union, Callable, Any
 
 import smocs.control_plane
@@ -97,13 +98,16 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     def _setup_tensorboard(self):
         """
         Set up TensorBoard logging.
-        Creates the logging directory and file writer.
+        Creates the logging directory and file writer with timestamp.
         """
         # Get logdir from config, default to ./logs/env if not specified
         logdir_base = self.gym_config.get('logdir', './logs/env')
         
-        # Create metrics subdirectory
-        self.tensorboard_logdir = os.path.join(logdir_base, 'metrics')
+        # Add timestamp to avoid overriding previous runs
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Create metrics subdirectory with timestamp
+        self.tensorboard_logdir = os.path.join(logdir_base, f'{timestamp}/metrics')
         
         try:
             os.makedirs(self.tensorboard_logdir, exist_ok=True)
@@ -309,12 +313,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             tf.summary.scalar('Episode/Duration_Seconds', 
                             data=episode_duration, step=self.episode_num)
             
-            # Also log episode metrics indexed by total steps for comparison with agent
-            tf.summary.scalar('Training_Reward', 
-                            data=episode_reward, step=self.total_steps)
-            tf.summary.scalar('Training_Episode_Length', 
-                            data=episode_length, step=self.total_steps)
-            
             # Calculate steps per second
             if episode_duration > 0:
                 steps_per_sec = episode_length / episode_duration
@@ -489,76 +487,126 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def step_environment(self, action):
         """
-        Execute one step in the environment and send results to all three Kafka topics.
-        Logs comprehensive metrics to TensorBoard.
+        Execute one step in the environment and send results to all Kafka topics.
+        
+        CRITICAL: This action must be for the current state (self.current_obs).
+        The sequence is:
+        1. Agent generates action At for state St
+        2. Gym receives action At
+        3. Gym executes: St+1, reward, done = env.step(At)
+        4. Gym sends SARSA(St, At, reward, St+1, done)
+        5. If NOT done: Gym sends state St+1 so agent can generate At+1
+        6. If done: Gym resets and sends S0 of new episode
         
         Args:
-            action: Action to execute
+            action: Action to execute on current state
             
         Returns:
             Tuple indicating success and any outputs to send
         """
         try:
-            # Reset environment if needed (this logic handles the reset after done)
+            # Reset environment if needed (first step of episode)
             if self.current_obs is None:
                 self.current_obs, info = self.env.reset()
                 self.episode_reward = 0.0
                 self.episode_start_time = time.time()
-                logging.info(f"Reset environment - Episode {self.episode_num}")
-                # Send initial state after reset
+                self.episode_step = 0
+                logging.info(f"[GYM-STEP] Reset environment - Episode {self.episode_num}")
+                logging.info(f"[GYM-STEP] Initial state S0: {self.current_obs}")
+                
+                # Send initial state so agent can generate first action
                 self.send_state_message(self.current_obs)
+                logging.info(f"[GYM-STEP] Sent initial state S0 to agent")
+                
+                # Return without stepping - wait for agent's action for S0
+                return True, []
             
-            # Execute environment step
+            # Store current state (St) before stepping
+            current_state = self.current_obs.copy()
+            
+            logging.info("=" * 80)
+            logging.info(f"[GYM-STEP] Step {self.total_steps + 1} starting")
+            logging.info(f"[GYM-STEP] Current state St (step {self.total_steps}): {current_state}")
+            logging.info(f"[GYM-STEP] Action At from agent: {action}")
+            logging.info(f"[GYM-STEP] Executing: St+1 = env.step(At)")
+            
+            # Execute environment step: St+1, reward = env.step(At)
             next_obs, reward, done, truncated, info = self.env.step(action)
             
-            # Update episode reward before logging
-            self.episode_reward += reward
+            logging.info(f"[GYM-STEP] Next state St+1 (step {self.total_steps + 1}): {next_obs}")
+            logging.info(f"[GYM-STEP] Reward: {reward:.3f}")
+            logging.info(f"[GYM-STEP] Done: {done}, Truncated: {truncated}")
             
-            # Update counters
+            # Update episode reward and counters
+            self.episode_reward += reward
             self.episode_step += 1
             self.total_steps += 1
             
             # Log per-step metrics to TensorBoard
             self.log_step_metrics(action, reward)
             
-            # Create all three message types
+            # Create SARSA tuple: (St, At, Rt, St+1, done)
             sarsa_data = self.create_sarsa_data(
-                self.current_obs, action, reward, next_obs, done, truncated, info
+                current_state, action, reward, next_obs, done, truncated, info
             )
+            
+            # Create decomposed data for monitoring
             decomposed_data = self.create_decomposed_data(
-                self.current_obs, action, reward, next_obs, done, truncated, info
+                current_state, action, reward, next_obs, done, truncated, info
             )
             
-            # Update state
-            self.current_obs = next_obs
+            logging.info(f"[GYM-STEP] Created SARSA tuple:")
+            logging.info(f"  State St (step {self.total_steps - 1}): {current_state[:3]}...")
+            logging.info(f"  Action At: {action}")
+            logging.info(f"  Reward Rt: {reward:.3f}")
+            logging.info(f"  Next_state St+1 (step {self.total_steps}): {next_obs[:3]}...")
+            logging.info(f"  Done: {done or truncated}")
             
-            # Send state message after updating current_obs
-            self.send_state_message(self.current_obs)
-            
-            logging.info(f"Step {self.total_steps} (Episode {self.episode_num}, Step {self.episode_step}): "
-                        f"Action={action}, Reward={reward:.3f}, Done={done}, Truncated={truncated}")
-            
-            # Handle episode end
+            # Handle episode end vs. continuation differently
             if done or truncated:
+                # Episode ended - log metrics
                 episode_duration = time.time() - self.episode_start_time
                 
                 # Log episode-level metrics to TensorBoard
                 self.log_episode_metrics(self.episode_step, self.episode_reward, episode_duration)
                 
-                logging.info(f"Episode {self.episode_num} finished after {self.episode_step} steps. "
-                           f"Total reward: {self.episode_reward:.3f}, Duration: {episode_duration:.2f}s")
+                logging.info(f"[GYM-EPISODE] Episode {self.episode_num} FINISHED")
+                logging.info(f"  Total steps: {self.episode_step}")
+                logging.info(f"  Total reward: {self.episode_reward:.3f}")
+                logging.info(f"  Duration: {episode_duration:.2f}s")
+                logging.info(f"  Done: {done}, Truncated: {truncated}")
                 
-                # Reset for next episode
-                self.current_obs = None  # Will trigger reset on next step
+                # CRITICAL: Reset immediately and send S0 of new episode
+                # Don't send the terminal state (St+1) since agent can't act on it
+                self.current_obs, info = self.env.reset()
                 self.episode_num += 1
                 self.episode_step = 0
                 self.episode_reward = 0.0
+                self.episode_start_time = time.time()
+                
+                logging.info(f"[GYM-STEP] Auto-reset for Episode {self.episode_num}")
+                logging.info(f"[GYM-STEP] New initial state S0: {self.current_obs}")
+                
+                # Send S0 of new episode so agent can generate first action
+                self.send_state_message(self.current_obs)
+                logging.info(f"[GYM-STEP] Sent initial state S0 of Episode {self.episode_num} to agent")
+                
+            else:
+                # Episode continuing - send next state
+                self.current_obs = next_obs
+                
+                # Send next state (St+1) so agent can generate next action (At+1)
+                self.send_state_message(self.current_obs)
+                logging.info(f"[GYM-STEP] Sent next state St+1 (step {self.total_steps}) to agent")
+            
+            logging.info(f"[GYM-STEP] Step {self.total_steps} complete")
+            logging.info("=" * 80)
             
             # Add delay if specified
             if self.step_delay > 0:
                 time.sleep(self.step_delay)
             
-            # Prepare outputs for all three topics
+            # Prepare outputs for Kafka (SARSA and decomposed topics)
             outputs = [
                 (self.producer.sanitize_topic_name(self.output_topics['sarsa']), json.dumps(sarsa_data)),
                 (self.producer.sanitize_topic_name(self.output_topics['decomposed']), json.dumps(decomposed_data))
@@ -567,7 +615,9 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             return True, outputs
             
         except Exception as e:
-            logging.error(f"Error stepping environment: {e}")
+            logging.error(f"[GYM-STEP] Error stepping environment: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
             return False, []
     
     def step_with_default_action(self):
@@ -757,4 +807,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  
