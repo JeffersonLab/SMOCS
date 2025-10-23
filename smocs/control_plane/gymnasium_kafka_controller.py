@@ -1,10 +1,11 @@
+import os
+import time
 import json
 import logging
-import time
-import os
 import numpy as np
 import tensorflow as tf
 import gymnasium as gym
+from datetime import datetime
 from typing import List, Tuple, Union, Callable, Any
 
 import smocs.control_plane
@@ -97,13 +98,16 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     def _setup_tensorboard(self):
         """
         Set up TensorBoard logging.
-        Creates the logging directory and file writer.
+        Creates the logging directory and file writer with timestamp.
         """
         # Get logdir from config, default to ./logs/env if not specified
         logdir_base = self.gym_config.get('logdir', './logs/env')
         
-        # Create metrics subdirectory
-        self.tensorboard_logdir = os.path.join(logdir_base, 'metrics')
+        # Add timestamp to avoid overriding previous runs
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Create metrics subdirectory with timestamp
+        self.tensorboard_logdir = os.path.join(logdir_base, f'{timestamp}/metrics')
         
         try:
             os.makedirs(self.tensorboard_logdir, exist_ok=True)
@@ -173,10 +177,11 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def parse_action(self, message: str):
         """
-        Parse action from Kafka message, handling numpy arrays.
+        Parse action from Kafka message.
         
-        Accepts:
-        1. {"channels": {"action": ...}, "timestamp": ...} 
+        Accepts two formats:
+        1. {"channels": {"action": [...]}, "timestamp": ...}  (preferred)
+        2. {"action": [...], "timestamp": ...}  (legacy)
         
         Args:
             message: JSON string containing action data
@@ -188,19 +193,25 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             ValueError: If message cannot be parsed or action is invalid
         """
         try:
-            
             data = json.loads(message)
             
-            # Extract action from channels
+            # Handle different message formats
+            # Format 1: Channels format (preferred for consistency)
             if 'channels' in data and isinstance(data['channels'], dict):
                 if 'action' in data['channels']:
                     action = data['channels']['action']
                 else:
                     raise ValueError(f"No 'action' field found in channels: {data}")
+            # Format 2: Direct action field (legacy)
+            elif 'action' in data:
+                action = data['action']
+            # Format 3: Raw list/scalar (legacy)
+            elif isinstance(data, (list, int, float)):
+                action = data
             else:
-                raise ValueError(f"No 'channels' field found in message formatted properly: {data}")
+                raise ValueError(f"No 'action' field found in message: {data}")
             
-            
+            # Convert to numpy array with correct dtype for continuous spaces
             if hasattr(self.env.action_space, 'shape'):
                 if not isinstance(action, np.ndarray):
                     action = np.array(action, dtype=np.float32)
@@ -209,7 +220,9 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             
             # Validate action is in action space
             if not self.env.action_space.contains(action):
-                logging.warning(f"Action {action} not in action space {self.env.action_space}") 
+                logging.warning(f"Action {action} not in action space {self.env.action_space}")
+                # Use default action instead
+                return self.get_default_action()
             
             return action
             
@@ -300,12 +313,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             tf.summary.scalar('Episode/Duration_Seconds', 
                             data=episode_duration, step=self.episode_num)
             
-            # Also log episode metrics indexed by total steps for comparison with agent
-            tf.summary.scalar('Training_Reward', 
-                            data=episode_reward, step=self.total_steps)
-            tf.summary.scalar('Training_Episode_Length', 
-                            data=episode_length, step=self.total_steps)
-            
             # Calculate steps per second
             if episode_duration > 0:
                 steps_per_sec = episode_length / episode_duration
@@ -314,7 +321,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def create_sarsa_data(self, state, action, reward, next_state, done, truncated, info):
         """
-        Create SARSA topic data
+        Create SARSA topic data with native formats (no flattening).
         
         Args:
             state: Current observation
@@ -326,7 +333,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             info: Additional info dictionary
             
         Returns:
-            Dictionary containing SARSA data
+            Dictionary containing SARSA data in native formats
         """
         channels = {
             "state": self.convert_for_json(state),
@@ -616,43 +623,25 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     def step_with_default_action(self):
         """
         Execute environment step with default action and send results to Kafka.
-        Used ONLY in non-blocking mode when no Kafka action is received.
+        Used in non-blocking mode when no Kafka action is received.
         """
         try:
             action = self.get_default_action()
-            logging.debug(f"[GYM-DEFAULT] Using default action: {action}")
-            
             success, outputs = self.step_environment(action)
             
             # Send outputs directly since we're not returning from process_message
             if success and outputs:
-                for output in outputs:
-                    try:
-                        if len(output) == 2:
-                            topic, message_content = output
-                            key = None
-                        elif len(output) == 3:
-                            topic, message_content, key = output
-                        else:
-                            raise ValueError(f"Invalid output tuple length: {len(output)}")
-                        
-                        self.producer.send_to_kafka(topic, message_content, key)
-                        
-                    except Exception as e:
-                        logging.error(f"[GYM-DEFAULT] Failed to send output: {e}")
-                        
+                for topic, message in outputs:
+                    self.producer.send_to_kafka(topic, message)
+                    
         except Exception as e:
-            logging.error(f"[GYM-DEFAULT] Error in default action step: {e}")
+            logging.error(f"Error in default action step: {e}")
     
     def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
         """
-        This method is required by KafkaStreamingProcessBase but not used in blocking mode.
-        The gym controller handles action messages directly in consume_messages().
+        Process action message from Kafka and execute environment step.
         
-        This is only called in non-blocking mode via the parent class's consume_messages,
-        but we override consume_messages, so this is effectively unused.
-
-        We do not use the default consume messages as it only works in non blocking mode currently.
+        This method is called by KafkaStreamingProcessBase when a message is received.
         
         Args:
             message: The message value (JSON string with action)
@@ -661,10 +650,23 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             offset: The message offset
             
         Returns:
-            Tuple[bool, List[Tuple]]: Success status and empty list (outputs handled elsewhere)
+            Tuple[bool, List[Tuple]]: Success status and list of outputs to send to Kafka
         """
-        logging.warning(f"process_message() called but should not be used. Message: {message[:100]}")
-        return True, []
+        try:
+            # Parse action from Kafka message
+            action = self.parse_action(message)
+            logging.debug(f"Received action from Kafka: {action}")
+            
+            # Execute environment step
+            return self.step_environment(action)
+            
+        except ValueError as e:
+            logging.error(f"Invalid action message from topic {topic}: {e}")
+            logging.error(f"Message content: {message}")
+            return False, []
+        except Exception as e:
+            logging.error(f"Error processing action message: {e}")
+            return False, []
     
     def start(self):
         """
@@ -685,11 +687,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def consume_messages(self):
         """
-        Main consumption loop with TRUE blocking on Kafka actions.
+        Main consumption loop with support for blocking and non-blocking modes.
         
-        In blocking mode, the environment waits for an action from Kafka before
-        stepping. This ensures the agent's action for state St is actually used
-        to transition from St to St+1.
+        Overrides the base class method to add default action handling
+        when operating in non-blocking mode.
         """
         logging.info(f"Starting Kafka Gym wrapper loop (blocking_mode={self.blocking_mode})...")
         
@@ -698,46 +699,33 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             self.current_obs, info = self.env.reset()
             self.episode_reward = 0.0
             self.episode_start_time = time.time()
-            logging.info(f"[GYM] Environment reset on startup - Episode {self.episode_num}")
-            logging.info(f"[GYM] Initial state S0: {self.current_obs}")
+            logging.info("Environment reset on startup")
             # Send initial state immediately after reset
             self.send_state_message(self.current_obs)
-            logging.info(f"[GYM] Sent initial state S0 to agent")
+
 
         while self.running:
             try:
-                if self.blocking_mode:
-                    # ===== TRUE BLOCKING MODE =====
-                    # Wait for action from Kafka before stepping environment
-                    logging.debug("[GYM-BLOCKING] Waiting for action from agent...")
-                    
-                    # Poll with longer timeout, keep waiting until we get an action
-                    message_batch = self.consumer.poll(timeout_ms=5000)
-                    
-                    if not message_batch:
-                        # No action received, keep waiting
-                        logging.debug("[GYM-BLOCKING] No action received, continuing to wait...")
-                        continue
-                    
-                    # Process the action message
+                # Poll for messages with timeout
+                message_batch = self.consumer.poll(timeout_ms=1000)
+                
+                if message_batch:
+                    # Process Kafka actions normally
                     for topic_partition, messages in message_batch.items():
                         for message in messages:
                             try:
-                                logging.info(f"[GYM-BLOCKING] Received action message at offset {message.offset}")
-                                
-                                # Parse the action
-                                action = self.parse_action(message.value)
-                                logging.info(f"[GYM-BLOCKING] Parsed action: {action}")
-                                logging.info(f"[GYM-BLOCKING] Will execute on current state: {self.current_obs[:3] if self.current_obs is not None else 'None'}...")
-                                
-                                # Step the environment with this action
-                                success, outputs = self.step_environment(action)
+                                success, outputs = self.process_message(
+                                    message=message.value,
+                                    topic=message.topic,
+                                    partition=message.partition,
+                                    offset=message.offset
+                                )
                                 
                                 if not success:
-                                    logging.warning(f"[GYM-BLOCKING] Environment step failed")
+                                    logging.warning(f"Message processing failed for topic {message.topic}, offset {message.offset}")
                                     continue
                                 
-                                # Send outputs to Kafka (SARSA and decomposed data)
+                                # Send outputs to Kafka
                                 if outputs:
                                     for output in outputs:
                                         try:
@@ -750,69 +738,25 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                                                 raise ValueError(f"Invalid output tuple length: {len(output)}")
                                             
                                             record_metadata = self.producer.send_to_kafka(topic, message_content, key)
-                                            logging.debug(f"[GYM-BLOCKING] Sent output to topic '{topic}' - partition {record_metadata.partition}, offset {record_metadata.offset}")
+                                            logging.debug(f"Sent step data to topic '{topic}' - partition {record_metadata.partition}, offset {record_metadata.offset}")
                                             
                                         except Exception as e:
-                                            logging.error(f"[GYM-BLOCKING] Failed to send output tuple {output}: {e}")
+                                            logging.error(f"Failed to send output tuple {output}: {e}")
                                 
-                            except ValueError as e:
-                                logging.error(f"[GYM-BLOCKING] Invalid action message: {e}")
-                                logging.error(f"[GYM-BLOCKING] Message content: {message.value}")
                             except Exception as e:
-                                logging.error(f"[GYM-BLOCKING] Error processing action message: {e}")
+                                logging.error(f"Error processing message from topic {message.topic}: {e}")
                                 self.handle_processing_error(e, message)
-                
                 else:
-                    # ===== NON-BLOCKING MODE =====
-                    # Use default actions when no Kafka action is received
-                    message_batch = self.consumer.poll(timeout_ms=1000)
-                    
-                    if message_batch:
-                        # Process Kafka actions if received
-                        for topic_partition, messages in message_batch.items():
-                            for message in messages:
-                                try:
-                                    action = self.parse_action(message.value)
-                                    logging.debug(f"[GYM-NONBLOCKING] Received action from Kafka: {action}")
-                                    
-                                    success, outputs = self.step_environment(action)
-                                    
-                                    if not success:
-                                        logging.warning(f"[GYM-NONBLOCKING] Environment step failed")
-                                        continue
-                                    
-                                    # Send outputs to Kafka
-                                    if outputs:
-                                        for output in outputs:
-                                            try:
-                                                if len(output) == 2:
-                                                    topic, message_content = output
-                                                    key = None
-                                                elif len(output) == 3:
-                                                    topic, message_content, key = output
-                                                else:
-                                                    raise ValueError(f"Invalid output tuple length: {len(output)}")
-                                                
-                                                record_metadata = self.producer.send_to_kafka(topic, message_content, key)
-                                                logging.debug(f"[GYM-NONBLOCKING] Sent output to topic '{topic}'")
-                                                
-                                            except Exception as e:
-                                                logging.error(f"[GYM-NONBLOCKING] Failed to send output: {e}")
-                                    
-                                except ValueError as e:
-                                    logging.error(f"[GYM-NONBLOCKING] Invalid action message: {e}")
-                                except Exception as e:
-                                    logging.error(f"[GYM-NONBLOCKING] Error processing message: {e}")
-                                    self.handle_processing_error(e, message)
+                    # No messages received
+                    if self.blocking_mode:
+                        # In blocking mode, just continue waiting
+                        continue
                     else:
-                        # No messages received - use default action
-                        logging.debug("[GYM-NONBLOCKING] No action received, using default action")
+                        # In non-blocking mode, use default action
                         self.step_with_default_action()
-                    
+                
             except Exception as e:
                 logging.error(f"Error in consumption loop: {e}")
-                import traceback
-                logging.error(traceback.format_exc())
                 time.sleep(1)
     
     def cleanup(self):
@@ -863,4 +807,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  

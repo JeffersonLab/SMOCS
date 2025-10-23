@@ -759,8 +759,11 @@ class RLControlAgent(AgentBase):
         """
         try:
             # Get logdir from config or use default
-            logdir = self.agent_config.get('logdir', f'./logs/rl_agent_{self.agent_id}')
+            logdir_base = self.agent_config.get('logdir', f'./logs/rl_agent_{self.agent_id}')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
+            logdir = os.path.join(logdir_base, f'{timestamp}')
+
             # Ensure logdir exists
             os.makedirs(logdir, exist_ok=True)
             
