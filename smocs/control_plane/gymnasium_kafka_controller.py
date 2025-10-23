@@ -314,7 +314,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def create_sarsa_data(self, state, action, reward, next_state, done, truncated, info):
         """
-        Create SARSA topic data with base64-encoded numpy arrays.
+        Create SARSA topic data
         
         Args:
             state: Current observation
@@ -326,7 +326,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             info: Additional info dictionary
             
         Returns:
-            Dictionary containing SARSA data with encoded numpy arrays
+            Dictionary containing SARSA data
         """
         channels = {
             "state": self.convert_for_json(state),
@@ -471,9 +471,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             state: Current observation to send
         """
         try:
-            logging.info(f"send_state_message pre '{state}'")
             state_data = self.create_state_data(state)
-            logging.info(f"send_state_message post '{state_data}'")
             kafka_topic = self.producer.sanitize_topic_name(self.output_topics['state'])
             self.producer.send_to_kafka(kafka_topic, json.dumps(state_data))
             logging.debug(f"Sent state to topic '{kafka_topic}'")
@@ -565,13 +563,11 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                 # Log episode-level metrics to TensorBoard
                 self.log_episode_metrics(self.episode_step, self.episode_reward, episode_duration)
                 
-                logging.info("=" * 80)
                 logging.info(f"[GYM-EPISODE] Episode {self.episode_num} FINISHED")
                 logging.info(f"  Total steps: {self.episode_step}")
                 logging.info(f"  Total reward: {self.episode_reward:.3f}")
                 logging.info(f"  Duration: {episode_duration:.2f}s")
                 logging.info(f"  Done: {done}, Truncated: {truncated}")
-                logging.info("=" * 80)
                 
                 # CRITICAL: Reset immediately and send S0 of new episode
                 # Don't send the terminal state (St+1) since agent can't act on it
@@ -655,6 +651,8 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         
         This is only called in non-blocking mode via the parent class's consume_messages,
         but we override consume_messages, so this is effectively unused.
+
+        We do not use the default consume messages as it only works in non blocking mode currently.
         
         Args:
             message: The message value (JSON string with action)
