@@ -3,7 +3,6 @@ import time
 import json
 import logging
 import numpy as np
-import tensorflow as tf
 import gymnasium as gym
 from datetime import datetime
 from typing import List, Tuple, Union, Callable, Any
@@ -78,9 +77,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         self.episode_reward = 0.0
         self.episode_start_time = None
         
-        # TensorBoard setup
-        self._setup_tensorboard()
-        
         logging.info(f"Kafka Gym Wrapper initialized:")
         logging.info(f"  Environment: {self.gym_config['environment']}")
         logging.info(f"  Input topic: {input_topic}")
@@ -93,34 +89,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         logging.info(f"  Step delay: {self.step_delay}s")
         logging.info(f"  Action space: {self.env.action_space}")
         logging.info(f"  Observation space: {self.env.observation_space}")
-        logging.info(f"  TensorBoard logdir: {self.tensorboard_logdir}")
-    
-    def _setup_tensorboard(self):
-        """
-        Set up TensorBoard logging.
-        Creates the logging directory and file writer with timestamp.
-        """
-        # Get logdir from config, default to ./logs/env if not specified
-        logdir_base = self.gym_config.get('logdir', './logs/env')
-        
-        # Add timestamp to avoid overriding previous runs
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
-        # Create metrics subdirectory with timestamp
-        self.tensorboard_logdir = os.path.join(logdir_base, f'{timestamp}/metrics')
-        
-        try:
-            os.makedirs(self.tensorboard_logdir, exist_ok=True)
-            logging.info(f"Created TensorBoard logging directory: {self.tensorboard_logdir}")
-        except OSError as error:
-            logging.error(f'Error creating TensorBoard directory: {error}')
-            raise
-        
-        # Create TensorBoard file writer
-        self.file_writer = tf.summary.create_file_writer(self.tensorboard_logdir)
-        self.file_writer.set_as_default()
-        
-        logging.info(f"TensorBoard file writer initialized at {self.tensorboard_logdir}")
     
     def _create_environment(self) -> gym.Env:
         """
@@ -244,73 +212,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             return [self.convert_for_json(item) for item in obj]
         else:
             return obj
-    
-    def log_step_metrics(self, action, reward):
-        """
-        Log per-step metrics to TensorBoard.
-        
-        Args:
-            action: Action taken
-            reward: Reward received
-        """
-        with self.file_writer.as_default():
-            # Log step reward
-            tf.summary.scalar('Step/Reward', data=reward, step=self.total_steps)
-            
-            # Log cumulative episode reward
-            tf.summary.scalar('Step/Cumulative_Episode_Reward', 
-                            data=self.episode_reward, step=self.total_steps)
-            
-            # Log action statistics
-            if hasattr(self.env.action_space, 'shape') and len(self.env.action_space.shape) > 0:
-                # Multi-dimensional action space
-                action_array = np.array(action)
-                tf.summary.scalar('Step/Action_Mean', 
-                                data=float(np.mean(action_array)), step=self.total_steps)
-                tf.summary.scalar('Step/Action_Std', 
-                                data=float(np.std(action_array)), step=self.total_steps)
-                tf.summary.scalar('Step/Action_Min', 
-                                data=float(np.min(action_array)), step=self.total_steps)
-                tf.summary.scalar('Step/Action_Max', 
-                                data=float(np.max(action_array)), step=self.total_steps)
-                
-                # Log individual action dimensions if reasonable number
-                if action_array.size <= 10:
-                    for i, a in enumerate(action_array.flatten()):
-                        tf.summary.scalar(f'Step/Action_Dim_{i}', 
-                                        data=float(a), step=self.total_steps)
-            else:
-                # Scalar or discrete action
-                tf.summary.scalar('Step/Action', 
-                                data=float(action), step=self.total_steps)
-            
-            # Log episode step within current episode
-            tf.summary.scalar('Step/Episode_Step', 
-                            data=self.episode_step, step=self.total_steps)
-    
-    def log_episode_metrics(self, episode_length, episode_reward, episode_duration):
-        """
-        Log episode-level metrics to TensorBoard.
-        
-        Args:
-            episode_length: Number of steps in the episode
-            episode_reward: Total reward for the episode
-            episode_duration: Wall-clock time for the episode
-        """
-        with self.file_writer.as_default():
-            # Log episode metrics indexed by episode number
-            tf.summary.scalar('Episode/Reward', 
-                            data=episode_reward, step=self.episode_num)
-            tf.summary.scalar('Episode/Length', 
-                            data=episode_length, step=self.episode_num)
-            tf.summary.scalar('Episode/Duration_Seconds', 
-                            data=episode_duration, step=self.episode_num)
-            
-            # Calculate steps per second
-            if episode_duration > 0:
-                steps_per_sec = episode_length / episode_duration
-                tf.summary.scalar('Episode/Steps_Per_Second', 
-                                data=steps_per_sec, step=self.episode_num)
     
     def create_sarsa_data(self, state, action, reward, next_state, done, truncated, info):
         """
@@ -535,9 +436,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             self.episode_step += 1
             self.total_steps += 1
             
-            # Log per-step metrics to TensorBoard
-            self.log_step_metrics(action, reward)
-            
             # Create SARSA tuple: (St, At, Rt, St+1, done)
             sarsa_data = self.create_sarsa_data(
                 current_state, action, reward, next_obs, done, truncated, info
@@ -560,16 +458,13 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                 # Episode ended - log metrics
                 episode_duration = time.time() - self.episode_start_time
                 
-                # Log episode-level metrics to TensorBoard
-                self.log_episode_metrics(self.episode_step, self.episode_reward, episode_duration)
-                
                 logging.info(f"[GYM-EPISODE] Episode {self.episode_num} FINISHED")
                 logging.info(f"  Total steps: {self.episode_step}")
                 logging.info(f"  Total reward: {self.episode_reward:.3f}")
                 logging.info(f"  Duration: {episode_duration:.2f}s")
                 logging.info(f"  Done: {done}, Truncated: {truncated}")
                 
-                # CRITICAL: Reset immediately and send S0 of new episode
+                # Reset immediately and send S0 of new episode
                 # Don't send the terminal state (St+1) since agent can't act on it
                 self.current_obs, info = self.env.reset()
                 self.episode_num += 1

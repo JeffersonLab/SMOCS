@@ -46,10 +46,6 @@ gymnasium:
   default_action_strategy: "random"  # Options: 'random', 'zero'
   step_delay: 0.0  # Delay in seconds between steps
   reset_on_start: true  # Reset environment on startup
-  
-  # TensorBoard logging directory
-  # This will create a 'metrics' subdirectory inside
-  logdir: "./logs/env"  # Will create ./logs/env/metrics for TensorBoard
 
 kafka:
   auto_create: true

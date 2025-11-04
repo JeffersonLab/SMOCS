@@ -6,7 +6,3 @@ PyYAML==6.0.2
 # gymnasium[box2d]           # For LunarLander, CarRacing, etc.
 # gymnasium[atari]           # For Atari games
 gymnasium[mujoco]          # For MuJoCo physics environments
-
-# For monitoring
-tensorflow==2.15.*
-tensorboard==2.15.1
