@@ -83,19 +83,11 @@ class ConfigLoader:
         output_topics = self.config.get('gymnasium', {}).get('output_topics')
         
         if output_topics:
-            # New format with multiple topics
+            # Three topic format with multiple outputs per step
             return {
                 'sarsa': output_topics.get('sarsa', 'gymnasium-sarsa'),
                 'state': output_topics.get('state', 'gymnasium-state'),
                 'decomposed': output_topics.get('decomposed', 'gymnasium-output')
-            }
-        else:
-            # Backward compatibility: use old single output_topic
-            single_topic = self.get_gymnasium_output_topic()
-            return {
-                'sarsa': 'gymnasium-sarsa',
-                'state': 'gymnasium-state',
-                'decomposed': single_topic
             }
 
     def get_gymnasium_config(self) -> Dict[str, Any]:

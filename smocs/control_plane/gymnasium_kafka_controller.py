@@ -179,9 +179,8 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         """
         Parse action from Kafka message.
         
-        Accepts two formats:
-        1. {"channels": {"action": [...]}, "timestamp": ...}  (preferred)
-        2. {"action": [...], "timestamp": ...}  (legacy)
+        Accepts 1 format:
+        1. {"channels": {"action": [...]}, "timestamp": ...}
         
         Args:
             message: JSON string containing action data
@@ -202,14 +201,8 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                     action = data['channels']['action']
                 else:
                     raise ValueError(f"No 'action' field found in channels: {data}")
-            # Format 2: Direct action field (legacy)
-            elif 'action' in data:
-                action = data['action']
-            # Format 3: Raw list/scalar (legacy)
-            elif isinstance(data, (list, int, float)):
-                action = data
             else:
-                raise ValueError(f"No 'action' field found in message: {data}")
+                raise ValueError(f"No 'channels' field found in message: {data}")
             
             # Convert to numpy array with correct dtype for continuous spaces
             if hasattr(self.env.action_space, 'shape'):
