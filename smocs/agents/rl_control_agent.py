@@ -842,7 +842,7 @@ class RLControlAgent(AgentBase):
                 self.jlab_agent,
                 self.jlab_agent_lock,
                 self.inference_done_event,  # Wait for this
-                self.ingestion_done_event   # Signal this
+                self.ingestion_done_event   # Signal this   
             )
         return None
     

@@ -93,14 +93,38 @@ autoencoder_agent2:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - state_2
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+      - IPMK203.PHAS
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IPMK101.PHAS
+      - IPMK401.XPOS
+      - IPMK401.YPOS
+      - IPMK401.PHAS
       bounds:
-      - [-8.0, 8.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
   model_output:
       channels:
-      - state_2
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+      - IPMK203.PHAS
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IPMK101.PHAS
+      - IPMK401.XPOS
+      - IPMK401.YPOS
+      - IPMK401.PHAS
   kafka_topics:
-    input: "gymnasium-output"
+    input: "CEBAF"
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
 
@@ -144,6 +168,36 @@ rl_control_agent1:
   
   # Logging directory
   logdir: "./logs/rl_agent1"
+
+csv:
+  # Path to CSV file inside container
+  file_path: "/app/data/2024-05-14-rf-ndx-raw-supplement.csv"
+  
+  # Column containing timestamps
+  date_column: "Date"
+  
+  # Date format string
+  date_format: "%Y-%m-%d_%H:%M:%S"
+  
+  # Optional: Filter by date range
+  # start_date: "2024-05-14_09:31:00"
+  # end_date: "2024-05-14_09:31:11"
+  
+  # Kafka topic to send data to
+  kafka_topic: "csv_timeseries_data"
+  
+  # Source identifier for messages
+  source: "csv_file_producer"
+  
+  # Columns to exclude from the channels data
+  exclude_columns:
+    - "level_0"
+  
+  # Delay between sending messages (seconds, 0 for no delay)
+  send_delay: 0.0
+  
+  # Loop playback continuously
+  loop_playback: false
 
 project:
   name: "smocs-gymnasium-rl-control"
