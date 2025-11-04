@@ -39,7 +39,7 @@ gymnasium:
   output_topics:
     sarsa: "gymnasium-sarsa"
     state: "gymnasium-state"
-    decomposed: "gymnasium-decomposed"
+    decomposed: "gymnasium-output"
   
   # Operation mode
   blocking_mode: false  # true = wait for Kafka actions, false = use default actions
