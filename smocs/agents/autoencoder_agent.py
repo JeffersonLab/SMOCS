@@ -52,6 +52,11 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                 'state_received_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
                 'state': sensor_values  # Raw data - preprocessing happens during training
             }
+
+            if not self.switch_fn(channels):
+                logging.info(f"AEDataIngestThread: Switch OFF, received message is not stored in DB...")
+                logging.info(f"AEDataIngestThread: Message: {sensor_data}")
+                return False
             
             status = self.db_manager.record_sensor_data(sensor_data)
             
@@ -487,7 +492,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
     Performs anomaly detection on streaming sensor data.
     """
     
-    def __init__(self, agent_id: str, config: Dict[str, Any]):
+    def __init__(self, agent_id: str, config: Dict[str, Any], switch_fn=None):
         self.window_size = config.get('window_size', 50)
         self.anomaly_threshold = None
         self.model = None
@@ -504,7 +509,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         pipeline_info = self.preprocessing_manager.get_pipeline_info()
         logging.info(f"AEMLInferenceThread: Initialized with preprocessing pipeline: {pipeline_info}")
         
-        super().__init__(agent_id, config)
+        super().__init__(agent_id, config, switch_fn=switch_fn)
    
     def load_model(self):
         """Load the latest autoencoder model from local directory."""
@@ -724,6 +729,11 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
             logging.debug(f"AEMLInferenceThread: Extracted {len(channel_values)} channels for inference")
             
+            if not self.switch_fn(filtered_channels):
+                logging.debug(f"AEMLInferenceThread: Switch is OFF, inference is not performed on the following message")
+                logging.debug(f"AEMLInferenceThread: Message {filtered_channels}")
+                return False, []
+
             # Parse inference request with processed data
             inference_request = self.parse_inference_request(message_data, topic, partition, offset)
             
@@ -880,14 +890,14 @@ class AutoencoderAgent(AgentBase):
         # Add agent_id to config for threads to use
         self.agent_config = autoencoder_config.copy()
         self.agent_config['agent_id'] = self.agent_id
-        
+
         logging.info(f"AEAgent: AutoencoderAgent initialized with config: {self.agent_config}")
         logging.info(f"AEAgent: Enabled threads: {self.enabled_threads}")
     
     def create_data_ingest_component(self):
         """Create data ingestion thread component."""
         if 'ingest' in self.enabled_threads:
-            return AutoencoderDataIngestThread(self.agent_id, self.agent_config)
+            return AutoencoderDataIngestThread(self.agent_id, self.agent_config, switch_fn=self.is_switch_on)
         return None
     
     def create_ml_training_component(self):
@@ -899,8 +909,29 @@ class AutoencoderAgent(AgentBase):
     def create_ml_inference_component(self):
         """Create ML inference thread component."""
         if 'inference' in self.enabled_threads:
-            return AutoencoderMLInferenceThread(self.agent_id, self.agent_config)
+            return AutoencoderMLInferenceThread(self.agent_id, self.agent_config, switch_fn=self.is_switch_on)
         return None
+    
+    def is_switch_on(self, message):
+        print(f"Agent config inputs: {self.agent_config['model_input']}")
+        if 'switch' in self.agent_config['model_input']:
+            switch_dict = self.agent_config['model_input']['switch']
+            switch_positions = []
+            print(f"Switch Dict: {switch_dict}")
+            print(f"Message: {message}")
+            for var_name in switch_dict:
+                position = True
+                if 'greater_than' in switch_dict[var_name]:
+                    if switch_dict[var_name]['greater_than'] > message[var_name]:
+                        position = False
+                if 'smaller_than' in switch_dict[var_name]:
+                    if switch_dict[var_name]['smaller_than'] < message[var_name]:
+                        position = False
+                switch_positions.append(position)
+            return all(switch_positions)
+        else:
+            return True
+
 
 def main():
     """Main entry point for autoencoder agent."""
