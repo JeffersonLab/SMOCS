@@ -1,4 +1,4 @@
-source: "gymnasium"
+source: "CEBAF"
 
 mqtt:
   topics:      
@@ -27,6 +27,9 @@ epics:
       - IPMK401.XPOS
       - IPMK401.YPOS
       - IPMK401.PHAS
+      - IGLK100HVPSkVolts
+      - ITFHALLAMODE
+      - ITFFCupK6485correctedCur.VAL
       
 gymnasium:
   # Environment settings
@@ -69,20 +72,34 @@ autoencoder_agent1:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - state_0
-      - state_1
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IGLK100HVPSkVolts
+      - ITFHALLAMODE
+      - ITFFCupK6485correctedCur.VAL
       
       bounds:
-      - [0.5, 2.0]
-      - [0.0, 1000.0]
+      - [-1.0, 1.0]
+      - [-1.0, 1.0]
+      - [10.0, 200.0]
+      - [0.0, 5.0]
+      - [0.0, 65.0]
+
+      switch: # By default switch follows "AND" operation; #TODO: Define AND, OR combination logic
+        IGLK100HVPSkVolts: 
+          greater_than: 10.0
+        ITFHALLAMODE:
+          greater_than: 0.0 
+        ITFFCupK6485correctedCur.VAL:
+          greater_than: 0.0
       
   model_output:
       channels:
-      - state_0
-      - state_1
+      - IPMK101.XPOS
+      - IPMK101.YPOS
 
   kafka_topics:
-    input: "gymnasium-output"
+    input: "CEBAF"
     output: "autoencoder1-anomalies"
     training_output: "autoencoder1-training-results"
 
@@ -102,20 +119,20 @@ autoencoder_agent2:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - state_2
-      - state_3
+      - IPMK203.XPOS
+      - IPMK203.YPOS
       
       bounds:
-      - [0.0, 1.0]
-      - [0.5, 2.0]
+      - [-1.0, 1.0]
+      - [-1.0, 1.0]
       
   model_output:
       channels:
-      - state_2
-      - state_3
+      - IPMK203.XPOS
+      - IPMK203.YPOS
 
   kafka_topics:
-    input: "gymnasium-output"
+    input: "CEBAF"
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
 
