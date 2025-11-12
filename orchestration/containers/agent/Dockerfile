@@ -65,4 +65,3 @@ COPY orchestration/containers/agent/init.sql /docker-entrypoint-initdb.d/init.sq
 ENV PYTHONPATH=/app
 
 RUN chmod +x /entrypoint.sh
-RUN chmod +x /jlab-standalone-entrypoint.sh
