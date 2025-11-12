@@ -198,57 +198,6 @@ services:
       gymnasium-kafka-controller:
         condition: service_started
 
-  jlab-rl-standalone:
-    extends: agent
-    profiles: ["jlab-standalone"]
-    environment:
-      JLAB_AGENT_TYPE: ${JLAB_AGENT_TYPE:-KerasTD3-v0}
-      JLAB_ENV_TYPE: ${JLAB_ENV_TYPE:-Pendulum-v1}
-      JLAB_LOGDIR: /app/jlab-logs  # Custom location for jlab logs
-      SMOCS_LOG_LEVEL: INFO
-    ports:
-      - "6007:6006"
-    volumes:
-      - jlab-configs:/app/jlab_configs:ro
-      - ./tb-logs:/app/logs:rw  # Original TensorBoard logs for SMOCS agents
-      - ./jlab-standalone-logs:/app/jlab-logs:rw  # Separate logs for standalone agent
-    depends_on:
-      kafka-broker:
-        condition: service_healthy
-    command: ["/bin/bash", "/jlab-standalone-entrypoint.sh"]
-    restart: unless-stopped
-
-  csv-kafka-producer:
-    build:
-      context: ../
-      dockerfile: ./orchestration/containers/csv-kafka-producer/Dockerfile
-    profiles: ["csv"]
-    environment:
-      KAFKA_BROKER_URL: kafka-broker:9092
-      PYTHONPATH: /app
-      SMOCS_LOG_LEVEL: INFO
-      # CSV Configuration via environment variables
-      CSV_FILE_PATH: /app/data/2024-05-14-rf-ndx-raw-supplement.csv
-      CSV_DATE_COLUMN: Date
-      CSV_DATE_FORMAT: "%Y-%m-%d_%H:%M:%S"
-      CSV_KAFKA_TOPIC: csv_timeseries_data
-      CSV_SOURCE_NAME: rf_ndx_raw_supplement
-      CSV_EXCLUDE_COLUMNS: level_0
-      CSV_SEND_DELAY: "0.0"
-      CSV_LOOP_PLAYBACK: "false"
-      # Optional: Date range filtering
-      # START_DATE: "2024-05-14_09:31:00"
-      # END_DATE: "2024-05-14_09:31:11"
-    networks:
-      - kafka-net
-    depends_on:
-      kafka-broker:
-        condition: service_healthy
-    volumes:
-      # Mount your CSV files here
-      - ./csv-data:/app/data:ro
-    command: ["python", "-m", "smocs.producers.csv_kafka_producer"]
-
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
