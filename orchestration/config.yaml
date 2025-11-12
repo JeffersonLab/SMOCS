@@ -47,7 +47,6 @@ kafka:
   partitions: 1
   replication_factor: 1
 
-# Autoencoder agents (existing)
 autoencoder_agent1:
   preprocessing_pipeline:
     - bounds_normalizer
@@ -128,76 +127,30 @@ autoencoder_agent2:
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
 
-# RL Control Agent Configuration
 rl_control_agent1:
-  # Environment configuration
   environment: "Pendulum-v1"
-  
-  # JLab agent configuration
   jlab_agent_type: "KerasTD3-v0"
   jlab_agent_config_path: "/app/jlab_configs/keras_td3.cfg"
-  
-  # Buffer configuration
   buffer_type: "ER-v0"
   buffer_size: 1000000
-  
-  # Thread configuration
   enabled_threads: ['ingest', 'training', 'inference']
-  
-  # Kafka topics (must match gymnasium wrapper output)
   kafka_topics:
     input_sarsa: "gymnasium-sarsa"
     input_state: "gymnasium-state"
     output_action: "gymnasium-action"
-
-  # Thread configs  
   data_ingest:
     use_pipeline_sync: true
     pipeline_timeout_sec: 100.0
-  
   training:
     check_interval_ms: 10
     use_pipeline_sync: true
     pipeline_timeout_sec: 100.0
-  
   inference:
     train_mode: true
     use_pipeline_sync: true
     pipeline_timeout_sec: 100.0
     log_lock_wait_threshold_ms: 100
-  
-  # Logging directory
   logdir: "./logs/rl_agent1"
-
-csv:
-  # Path to CSV file inside container
-  file_path: "/app/data/2024-05-14-rf-ndx-raw-supplement.csv"
-  
-  # Column containing timestamps
-  date_column: "Date"
-  
-  # Date format string
-  date_format: "%Y-%m-%d_%H:%M:%S"
-  
-  # Optional: Filter by date range
-  # start_date: "2024-05-14_09:31:00"
-  # end_date: "2024-05-14_09:31:11"
-  
-  # Kafka topic to send data to
-  kafka_topic: "csv_timeseries_data"
-  
-  # Source identifier for messages
-  source: "csv_file_producer"
-  
-  # Columns to exclude from the channels data
-  exclude_columns:
-    - "level_0"
-  
-  # Delay between sending messages (seconds, 0 for no delay)
-  send_delay: 0.0
-  
-  # Loop playback continuously
-  loop_playback: false
 
 project:
   name: "smocs-gymnasium-rl-control"
