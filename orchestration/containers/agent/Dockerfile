@@ -51,9 +51,6 @@ COPY orchestration/containers/agent/*-requirements.txt ./
 # Copy entrypoint script
 COPY orchestration/containers/agent/entrypoint.sh /entrypoint.sh
 
-# Copy JLab standalone entrypoint script
-COPY orchestration/containers/agent/jlab-standalone-entrypoint.sh /jlab-standalone-entrypoint.sh
-
 # Copy the entire smocs package and config
 COPY smocs ./smocs
 COPY orchestration/config.yaml ./config.yaml
