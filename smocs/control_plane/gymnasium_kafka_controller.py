@@ -1,16 +1,20 @@
-import os
-import time
 import json
 import logging
+import time
+import os
 import numpy as np
-import tensorflow as tf
-import gymnasium as gym
-from datetime import datetime
 from typing import List, Tuple, Union, Callable, Any
-
 import smocs.control_plane
+import gymnasium as gym
+
 from smocs.cores import KafkaStreamingProcessBase
-from smocs.utils import ConfigLoader, setup_logging
+from smocs.utils import ConfigLoader
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 
 class KafkaGymWrapper(KafkaStreamingProcessBase):
     """
@@ -22,12 +26,8 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     1. Blocking mode: Waits for actions from Kafka before stepping the environment
     2. Default action mode: Runs continuously using default actions when no Kafka action is received
     
-    The wrapper sends three types of messages to Kafka after each environment step:
-    1. SARSA topic: Complete RL transition tuples with native formats
-    2. State topic: Current state only for downstream consumers
-    3. Decomposed topic: Flattened data for logging/monitoring
-    
-    Logs comprehensive metrics to TensorBoard including per-step rewards, episode metrics, and more.
+    The wrapper sends complete RL transition tuples (state, action, reward, next_state, done, truncated, info)
+    back to Kafka after each environment step.
     """
     
     def __init__(self, config_path: str = None):
@@ -54,9 +54,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         
         # Extract topics from config
         input_topic = self.gym_config['input_topic']
-
-        # ConfigLoader now always returns output_topics as a dictionary
-        self.output_topics = self.gym_config['output_topics']
+        self.output_topic = self.gym_config['output_topic']
         
         # Store configuration
         self.blocking_mode = self.gym_config['blocking_mode']
@@ -75,52 +73,16 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         self.episode_step = 0
         self.episode_num = 0
         self.total_steps = 0
-        self.episode_reward = 0.0
-        self.episode_start_time = None
-        
-        # TensorBoard setup
-        self._setup_tensorboard()
         
         logging.info(f"Kafka Gym Wrapper initialized:")
         logging.info(f"  Environment: {self.gym_config['environment']}")
         logging.info(f"  Input topic: {input_topic}")
-        logging.info(f"  Output topics:")
-        logging.info(f"    SARSA: {self.output_topics['sarsa']}")
-        logging.info(f"    State: {self.output_topics['state']}")
-        logging.info(f"    Decomposed: {self.output_topics['decomposed']}")
+        logging.info(f"  Output topic: {self.output_topic}")
         logging.info(f"  Blocking mode: {self.blocking_mode}")
         logging.info(f"  Default action strategy: {self.default_action_strategy}")
         logging.info(f"  Step delay: {self.step_delay}s")
         logging.info(f"  Action space: {self.env.action_space}")
         logging.info(f"  Observation space: {self.env.observation_space}")
-        logging.info(f"  TensorBoard logdir: {self.tensorboard_logdir}")
-    
-    def _setup_tensorboard(self):
-        """
-        Set up TensorBoard logging.
-        Creates the logging directory and file writer with timestamp.
-        """
-        # Get logdir from config, default to ./logs/env if not specified
-        logdir_base = self.gym_config.get('logdir', './logs/env')
-        
-        # Add timestamp to avoid overriding previous runs
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
-        # Create metrics subdirectory with timestamp
-        self.tensorboard_logdir = os.path.join(logdir_base, f'{timestamp}/metrics')
-        
-        try:
-            os.makedirs(self.tensorboard_logdir, exist_ok=True)
-            logging.info(f"Created TensorBoard logging directory: {self.tensorboard_logdir}")
-        except OSError as error:
-            logging.error(f'Error creating TensorBoard directory: {error}')
-            raise
-        
-        # Create TensorBoard file writer
-        self.file_writer = tf.summary.create_file_writer(self.tensorboard_logdir)
-        self.file_writer.set_as_default()
-        
-        logging.info(f"TensorBoard file writer initialized at {self.tensorboard_logdir}")
     
     def _create_environment(self) -> gym.Env:
         """
@@ -179,10 +141,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         """
         Parse action from Kafka message.
         
-        Accepts two formats:
-        1. {"channels": {"action": [...]}, "timestamp": ...}  (preferred)
-        2. {"action": [...], "timestamp": ...}  (legacy)
-        
         Args:
             message: JSON string containing action data
             
@@ -196,27 +154,16 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             data = json.loads(message)
             
             # Handle different message formats
-            # Format 1: Channels format (preferred for consistency)
-            if 'channels' in data and isinstance(data['channels'], dict):
-                if 'action' in data['channels']:
-                    action = data['channels']['action']
-                else:
-                    raise ValueError(f"No 'action' field found in channels: {data}")
-            # Format 2: Direct action field (legacy)
-            elif 'action' in data:
+            if 'action' in data:
                 action = data['action']
-            # Format 3: Raw list/scalar (legacy)
             elif isinstance(data, (list, int, float)):
                 action = data
             else:
                 raise ValueError(f"No 'action' field found in message: {data}")
             
-            # Convert to numpy array with correct dtype for continuous spaces
-            if hasattr(self.env.action_space, 'shape'):
-                if not isinstance(action, np.ndarray):
-                    action = np.array(action, dtype=np.float32)
-                elif action.dtype != np.float32:
-                    action = action.astype(np.float32)
+            # Convert to numpy array if needed for continuous spaces
+            if hasattr(self.env.action_space, 'shape') and isinstance(action, list):
+                action = np.array(action)
             
             # Validate action is in action space
             if not self.env.action_space.contains(action):
@@ -231,147 +178,9 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         except Exception as e:
             raise ValueError(f"Error parsing action: {e}")
     
-    def convert_for_json(self, obj):
+    def create_step_data(self, state, action, reward, next_state, done, truncated, info):
         """
-        Convert numpy arrays and types to JSON-serializable formats.
-        
-        Args:
-            obj: Object to convert
-            
-        Returns:
-            JSON-serializable version of obj
-        """
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, (np.integer, np.floating)):
-            return obj.item()
-        elif isinstance(obj, dict):
-            return {k: self.convert_for_json(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self.convert_for_json(item) for item in obj]
-        else:
-            return obj
-    
-    def log_step_metrics(self, action, reward):
-        """
-        Log per-step metrics to TensorBoard.
-        
-        Args:
-            action: Action taken
-            reward: Reward received
-        """
-        with self.file_writer.as_default():
-            # Log step reward
-            tf.summary.scalar('Step/Reward', data=reward, step=self.total_steps)
-            
-            # Log cumulative episode reward
-            tf.summary.scalar('Step/Cumulative_Episode_Reward', 
-                            data=self.episode_reward, step=self.total_steps)
-            
-            # Log action statistics
-            if hasattr(self.env.action_space, 'shape') and len(self.env.action_space.shape) > 0:
-                # Multi-dimensional action space
-                action_array = np.array(action)
-                tf.summary.scalar('Step/Action_Mean', 
-                                data=float(np.mean(action_array)), step=self.total_steps)
-                tf.summary.scalar('Step/Action_Std', 
-                                data=float(np.std(action_array)), step=self.total_steps)
-                tf.summary.scalar('Step/Action_Min', 
-                                data=float(np.min(action_array)), step=self.total_steps)
-                tf.summary.scalar('Step/Action_Max', 
-                                data=float(np.max(action_array)), step=self.total_steps)
-                
-                # Log individual action dimensions if reasonable number
-                if action_array.size <= 10:
-                    for i, a in enumerate(action_array.flatten()):
-                        tf.summary.scalar(f'Step/Action_Dim_{i}', 
-                                        data=float(a), step=self.total_steps)
-            else:
-                # Scalar or discrete action
-                tf.summary.scalar('Step/Action', 
-                                data=float(action), step=self.total_steps)
-            
-            # Log episode step within current episode
-            tf.summary.scalar('Step/Episode_Step', 
-                            data=self.episode_step, step=self.total_steps)
-    
-    def log_episode_metrics(self, episode_length, episode_reward, episode_duration):
-        """
-        Log episode-level metrics to TensorBoard.
-        
-        Args:
-            episode_length: Number of steps in the episode
-            episode_reward: Total reward for the episode
-            episode_duration: Wall-clock time for the episode
-        """
-        with self.file_writer.as_default():
-            # Log episode metrics indexed by episode number
-            tf.summary.scalar('Episode/Reward', 
-                            data=episode_reward, step=self.episode_num)
-            tf.summary.scalar('Episode/Length', 
-                            data=episode_length, step=self.episode_num)
-            tf.summary.scalar('Episode/Duration_Seconds', 
-                            data=episode_duration, step=self.episode_num)
-            
-            # Calculate steps per second
-            if episode_duration > 0:
-                steps_per_sec = episode_length / episode_duration
-                tf.summary.scalar('Episode/Steps_Per_Second', 
-                                data=steps_per_sec, step=self.episode_num)
-    
-    def create_sarsa_data(self, state, action, reward, next_state, done, truncated, info):
-        """
-        Create SARSA topic data with native formats (no flattening).
-        
-        Args:
-            state: Current observation
-            action: Action taken
-            reward: Reward received
-            next_state: Next observation
-            done: Episode done flag
-            truncated: Episode truncated flag
-            info: Additional info dictionary
-            
-        Returns:
-            Dictionary containing SARSA data in native formats
-        """
-        channels = {
-            "state": self.convert_for_json(state),
-            "action": self.convert_for_json(action),
-            "reward": float(reward),
-            "next_state": self.convert_for_json(next_state),
-            "done": bool(done),
-            "truncated": bool(truncated),
-            "info": self.convert_for_json(info)
-        }
-        
-        return {
-            "channels": channels,
-            "timestamp": time.time()
-        }
-    
-    def create_state_data(self, state):
-        """
-        Create state topic data containing only current state.
-        
-        Args:
-            state: Current observation
-            
-        Returns:
-            Dictionary containing state data
-        """
-        channels = {
-            "state": self.convert_for_json(state)
-        }
-        
-        return {
-            "channels": channels,
-            "timestamp": time.time()
-        }
-    
-    def create_decomposed_data(self, state, action, reward, next_state, done, truncated, info):
-        """
-        Create decomposed topic data with flattened arrays for logging/monitoring.
+        Create step data dictionary for sending to Kafka in the expected InfluxDB format.
         Flattens arrays while preserving shape information for reconstruction.
         
         Args:
@@ -384,8 +193,21 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             info: Additional info dictionary
             
         Returns:
-            Dictionary containing decomposed data with flattened arrays
+            Dictionary containing step data in InfluxDB consumer format with flattened arrays
         """
+        # Convert numpy arrays to lists for JSON serialization
+        def convert_for_json(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            elif isinstance(obj, dict):
+                return {k: convert_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_for_json(item) for item in obj]
+            else:
+                return obj
+        
         def flatten_array_with_shape(arr, prefix):
             """
             Flatten an array and return both flattened fields and shape info.
@@ -397,7 +219,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             Returns:
                 dict: Flattened fields and shape information
             """
-            converted = self.convert_for_json(arr)
+            converted = convert_for_json(arr)
             fields = {}
             
             if isinstance(converted, list):
@@ -452,7 +274,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         channels["reward_is_array"] = False
         
         # Add info fields if they exist and are simple types
-        converted_info = self.convert_for_json(info)
+        converted_info = convert_for_json(info)
         if isinstance(converted_info, dict):
             for key, value in converted_info.items():
                 # Only add simple numeric/boolean values
@@ -465,159 +287,63 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                     info_fields = flatten_array_with_shape(value, f"info_{key}")
                     channels.update(info_fields)
         
-        return {
+        # Create the final message in standard format
+        step_data = {
             "channels": channels,
             "timestamp": time.time()
         }
-    
-    def send_state_message(self, state):
-        """
-        Send current state to the state topic.
         
-        Args:
-            state: Current observation to send
-        """
-        try:
-            state_data = self.create_state_data(state)
-            kafka_topic = self.producer.sanitize_topic_name(self.output_topics['state'])
-            self.producer.send_to_kafka(kafka_topic, json.dumps(state_data))
-            logging.debug(f"Sent state to topic '{kafka_topic}'")
-        except Exception as e:
-            logging.error(f"Error sending state message: {e}")
+        return step_data
     
     def step_environment(self, action):
         """
-        Execute one step in the environment and send results to all Kafka topics.
-        
-        CRITICAL: This action must be for the current state (self.current_obs).
-        The sequence is:
-        1. Agent generates action At for state St
-        2. Gym receives action At
-        3. Gym executes: St+1, reward, done = env.step(At)
-        4. Gym sends SARSA(St, At, reward, St+1, done)
-        5. If NOT done: Gym sends state St+1 so agent can generate At+1
-        6. If done: Gym resets and sends S0 of new episode
+        Execute one step in the environment and send results to Kafka.
         
         Args:
-            action: Action to execute on current state
+            action: Action to execute
             
         Returns:
             Tuple indicating success and any outputs to send
         """
         try:
-            # Reset environment if needed (first step of episode)
+            # Reset environment if needed (this logic handles the reset after done)
             if self.current_obs is None:
                 self.current_obs, info = self.env.reset()
-                self.episode_reward = 0.0
-                self.episode_start_time = time.time()
-                self.episode_step = 0
-                logging.info(f"[GYM-STEP] Reset environment - Episode {self.episode_num}")
-                logging.info(f"[GYM-STEP] Initial state S0: {self.current_obs}")
-                
-                # Send initial state so agent can generate first action
-                self.send_state_message(self.current_obs)
-                logging.info(f"[GYM-STEP] Sent initial state S0 to agent")
-                
-                # Return without stepping - wait for agent's action for S0
-                return True, []
+                logging.info(f"Reset environment - Episode {self.episode_num}")
             
-            # Store current state (St) before stepping
-            current_state = self.current_obs.copy()
-            
-            logging.info("=" * 80)
-            logging.info(f"[GYM-STEP] Step {self.total_steps + 1} starting")
-            logging.info(f"[GYM-STEP] Current state St (step {self.total_steps}): {current_state}")
-            logging.info(f"[GYM-STEP] Action At from agent: {action}")
-            logging.info(f"[GYM-STEP] Executing: St+1 = env.step(At)")
-            
-            # Execute environment step: St+1, reward = env.step(At)
+            # Execute environment step
             next_obs, reward, done, truncated, info = self.env.step(action)
             
-            logging.info(f"[GYM-STEP] Next state St+1 (step {self.total_steps + 1}): {next_obs}")
-            logging.info(f"[GYM-STEP] Reward: {reward:.3f}")
-            logging.info(f"[GYM-STEP] Done: {done}, Truncated: {truncated}")
+            # Create kafka message with step data
+            step_data = self.create_step_data(
+                self.current_obs, action, reward, next_obs, done, truncated, info
+            )
             
-            # Update episode reward and counters
-            self.episode_reward += reward
+            # Update counters and state
             self.episode_step += 1
             self.total_steps += 1
+            self.current_obs = next_obs
             
-            # Log per-step metrics to TensorBoard
-            self.log_step_metrics(action, reward)
+            logging.info(f"Step {self.total_steps} (Episode {self.episode_num}, Step {self.episode_step}): "
+                        f"Action={action}, Reward={reward:.3f}, Done={done}, Truncated={truncated}")
             
-            # Create SARSA tuple: (St, At, Rt, St+1, done)
-            sarsa_data = self.create_sarsa_data(
-                current_state, action, reward, next_obs, done, truncated, info
-            )
-            
-            # Create decomposed data for monitoring
-            decomposed_data = self.create_decomposed_data(
-                current_state, action, reward, next_obs, done, truncated, info
-            )
-            
-            logging.info(f"[GYM-STEP] Created SARSA tuple:")
-            logging.info(f"  State St (step {self.total_steps - 1}): {current_state[:3]}...")
-            logging.info(f"  Action At: {action}")
-            logging.info(f"  Reward Rt: {reward:.3f}")
-            logging.info(f"  Next_state St+1 (step {self.total_steps}): {next_obs[:3]}...")
-            logging.info(f"  Done: {done or truncated}")
-            
-            # Handle episode end vs. continuation differently
             if done or truncated:
-                # Episode ended - log metrics
-                episode_duration = time.time() - self.episode_start_time
-                
-                # Log episode-level metrics to TensorBoard
-                self.log_episode_metrics(self.episode_step, self.episode_reward, episode_duration)
-                
-                logging.info(f"[GYM-EPISODE] Episode {self.episode_num} FINISHED")
-                logging.info(f"  Total steps: {self.episode_step}")
-                logging.info(f"  Total reward: {self.episode_reward:.3f}")
-                logging.info(f"  Duration: {episode_duration:.2f}s")
-                logging.info(f"  Done: {done}, Truncated: {truncated}")
-                
-                # CRITICAL: Reset immediately and send S0 of new episode
-                # Don't send the terminal state (St+1) since agent can't act on it
-                self.current_obs, info = self.env.reset()
+                logging.info(f"Episode {self.episode_num} finished after {self.episode_step} steps. "
+                           f"Final reward: {reward:.3f}")
+                self.current_obs = None  # Will trigger reset on next step
                 self.episode_num += 1
                 self.episode_step = 0
-                self.episode_reward = 0.0
-                self.episode_start_time = time.time()
-                
-                logging.info(f"[GYM-STEP] Auto-reset for Episode {self.episode_num}")
-                logging.info(f"[GYM-STEP] New initial state S0: {self.current_obs}")
-                
-                # Send S0 of new episode so agent can generate first action
-                self.send_state_message(self.current_obs)
-                logging.info(f"[GYM-STEP] Sent initial state S0 of Episode {self.episode_num} to agent")
-                
-            else:
-                # Episode continuing - send next state
-                self.current_obs = next_obs
-                
-                # Send next state (St+1) so agent can generate next action (At+1)
-                self.send_state_message(self.current_obs)
-                logging.info(f"[GYM-STEP] Sent next state St+1 (step {self.total_steps}) to agent")
-            
-            logging.info(f"[GYM-STEP] Step {self.total_steps} complete")
-            logging.info("=" * 80)
             
             # Add delay if specified
             if self.step_delay > 0:
                 time.sleep(self.step_delay)
             
-            # Prepare outputs for Kafka (SARSA and decomposed topics)
-            outputs = [
-                (self.producer.sanitize_topic_name(self.output_topics['sarsa']), json.dumps(sarsa_data)),
-                (self.producer.sanitize_topic_name(self.output_topics['decomposed']), json.dumps(decomposed_data))
-            ]
-            
-            return True, outputs
+            # Convert to Kafka topic name and return data to send
+            kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
+            return True, [(kafka_topic, json.dumps(step_data))]
             
         except Exception as e:
-            logging.error(f"[GYM-STEP] Error stepping environment: {e}")
-            import traceback
-            logging.error(traceback.format_exc())
+            logging.error(f"Error stepping environment: {e}")
             return False, []
     
     def step_with_default_action(self):
@@ -677,6 +403,11 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         try:
             logging.info("Starting Kafka Gym wrapper...")
             
+            # Reset environment if configured to do so
+            if self.reset_on_start:
+                self.current_obs, info = self.env.reset()
+                logging.info("Environment reset on startup")
+            
             # Call parent start method which sets up Kafka and begins consumption
             super().start()
             
@@ -694,16 +425,6 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         """
         logging.info(f"Starting Kafka Gym wrapper loop (blocking_mode={self.blocking_mode})...")
         
-        # Reset environment if configured to do so
-        if self.reset_on_start:
-            self.current_obs, info = self.env.reset()
-            self.episode_reward = 0.0
-            self.episode_start_time = time.time()
-            logging.info("Environment reset on startup")
-            # Send initial state immediately after reset
-            self.send_state_message(self.current_obs)
-
-
         while self.running:
             try:
                 # Poll for messages with timeout
@@ -761,16 +482,8 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
     
     def cleanup(self):
         """
-        Clean up environment, TensorBoard, and Kafka resources.
+        Clean up environment and Kafka resources.
         """
-        # Close TensorBoard file writer
-        if hasattr(self, 'file_writer') and self.file_writer:
-            try:
-                self.file_writer.close()
-                logging.info("TensorBoard file writer closed")
-            except Exception as e:
-                logging.error(f"Error closing TensorBoard file writer: {e}")
-        
         # Close gymnasium environment
         if hasattr(self, 'env') and self.env:
             try:
@@ -787,9 +500,6 @@ def main():
     """
     Main entry point for the Gymnasium Kafka controller.
     """
-
-    setup_logging()
-
     logging.info("Starting Gymnasium Kafka Controller...")
     
     try:
@@ -807,4 +517,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()  
+    main()
