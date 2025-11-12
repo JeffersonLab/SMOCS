@@ -201,7 +201,7 @@ services:
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
-    profiles: ["ui"]  # or add to your existing profiles
+    profiles: ["ui"]
     ports:
       - "8080:8080"
     environment:
