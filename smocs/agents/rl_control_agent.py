@@ -92,7 +92,7 @@ class RLDataIngestThread(KafkaConsumerBase):
         try:
             # Wait for inference to complete before processing SARSA
             if self.use_pipeline_sync:
-                logging.debug("PIPELINE STEP 2: DATA INGESTION - Waiting for inference to complete...")
+                logging.debug("PIPELINE STEP 2: DATA INGESTION - Waiting for inference to complete")
                 logging.debug(f"RLDataIngestThread: inference_done_event.is_set() = {self.inference_done_event.is_set()}")
                 
                 wait_start = time.time()
@@ -198,13 +198,12 @@ class RLDataIngestThread(KafkaConsumerBase):
         Expected SARSA message format from Gymnasium wrapper:
         {
             "channels": {
-                "state": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]},
-                "action": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]},
+                "state": {"_numpy_": True, "data": "", "dtype": "", "shape": []},
+                "action": {"_numpy_": True, "data": "", "dtype": "", "shape": []},
                 "reward": float,
-                "next_state": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]},
+                "next_state": {"_numpy_": True, "data": "", "dtype": "", "shape": []},
                 "done": bool,
                 "truncated": bool,
-                ...
             },
             "timestamp": float
         }
@@ -317,7 +316,7 @@ class RLTrainingThread(MLTrainingThreadBase):
     def start(self):
         """Start the training thread with custom training loop."""
         try:
-            logging.info("RLTrainingThread: Starting training loop...")
+            logging.info("RLTrainingThread: Starting training loop")
             self.running = True
             self.training_loop()
         except Exception as e:
@@ -332,7 +331,7 @@ class RLTrainingThread(MLTrainingThreadBase):
             try:
                 if self.use_pipeline_sync:
                     # Wait for ingestion to complete before training
-                    logging.debug("PIPELINE STEP 3: TRAINING - Waiting for ingestion to complete...")
+                    logging.debug("PIPELINE STEP 3: TRAINING - Waiting for ingestion to complete")
                     logging.debug(f"RLTrainingThread: ingestion_done_event.is_set() = {self.ingestion_done_event.is_set()}")
                     
                     wait_start = time.time()
@@ -355,12 +354,12 @@ class RLTrainingThread(MLTrainingThreadBase):
                     time.sleep(0.01)
                     
                     # Acquire lock and train
-                    logging.debug("PIPELINE STEP 3: TRAINING - Attempting to acquire agent lock...")
+                    logging.debug("PIPELINE STEP 3: TRAINING - Attempting to acquire agent lock")
                     acquired = self.agent_lock.acquire(blocking=True, timeout=2.0)
                     
                     if acquired:
                         try:
-                            logging.debug("PIPELINE STEP 3: TRAINING - Lock acquired, starting training...")
+                            logging.debug("PIPELINE STEP 3: TRAINING - Lock acquired, starting training")
                             train_start = time.time()
                             
                             with self.tb_writer.as_default():
@@ -477,11 +476,10 @@ class RLInferenceThread(KafkaStreamingProcessBase):
     def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
         """Process state from Kafka, generate action."""
         try:
-            # STEP 1: Wait for training to complete before processing this state
             # (For the first message, training_done is already set)
             # (For subsequent messages, this waits until the previous cycle completes)
             if self.use_pipeline_sync:
-                logging.debug("PIPELINE STEP 1: INFERENCE - Waiting for training cycle to complete...")
+                logging.debug("PIPELINE STEP 1: INFERENCE - Waiting for training cycle to complete")
                 logging.debug(f"RLInferenceThread: training_done_event.is_set() = {self.training_done_event.is_set()}")
                 
                 wait_start = time.time()
@@ -518,7 +516,7 @@ class RLInferenceThread(KafkaStreamingProcessBase):
                 logging.error("RLInferenceThread: Failed to generate action")
                 return False, []
 
-            logging.debug(f"PIPELINE STEP 1: INFERENCE - Generated action: {action_list[:3]}... (showing first 3 elements)")
+            logging.debug(f"PIPELINE STEP 1: INFERENCE - Generated action: {action_list[:3]} (showing first 3 elements)")
 
             # Create output message in channels format for consistency
             output_message = {
@@ -568,7 +566,7 @@ class RLInferenceThread(KafkaStreamingProcessBase):
         """Input state, generate action list by calling SOCT agent"""
         try:
             # Acquire lock and generate action
-            logging.debug("PIPELINE STEP 1: INFERENCE - Attempting to acquire agent lock...")
+            logging.debug("PIPELINE STEP 1: INFERENCE - Attempting to acquire agent lock")
             lock_wait_start = time.time()
             with self.agent_lock:
                 lock_wait_time = time.time() - lock_wait_start
@@ -611,7 +609,7 @@ class RLInferenceThread(KafkaStreamingProcessBase):
         Expected message format from Gymnasium wrapper:
         {
             "channels": {
-                "state": {"_numpy_": True, "data": "...", "dtype": "...", "shape": [...]}
+                "state": {"_numpy_": True, "data": "", "dtype": "", "shape": []}
             },
             "timestamp": float
         }
@@ -645,7 +643,7 @@ class RLInferenceThread(KafkaStreamingProcessBase):
             
             # Validate dtype
             if state.dtype != np.float32:
-                logging.warning(f"RLInferenceThread: State dtype is {state.dtype}, expected float32. Converting...")
+                logging.warning(f"RLInferenceThread: State dtype is {state.dtype}, expected float32. Converting")
                 state = state.astype(np.float32)
             
             return state
@@ -922,7 +920,7 @@ def main():
         agent = RLControlAgent(config_path, config_key)
         agent.start()
     except KeyboardInterrupt:
-        logging.info("Shutting down RL control agent...")
+        logging.info("Shutting down RL control agent")
     except Exception as e:
         logging.error(f"Error running RL control agent: {e}")
         raise
