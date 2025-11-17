@@ -40,10 +40,35 @@ RUN pip3 install --no-cache-dir -r base-requirements.txt
 RUN git clone https://github.com/JeffersonLab/SciOptControlToolkit.git /tmp/jlab && \
     cd /tmp/jlab && \
     pip3 install --no-cache-dir -r requirements.txt && \
-    pip3 install --no-cache-dir -e . && \
-    mkdir -p /app/jlab_configs_default && \
-    cp -r /tmp/jlab/jlab_opt_control/cfgs/* /app/jlab_configs_default/ && \
-    cd /
+    pip3 install --no-cache-dir -e .
+
+# Backup SOCT's original configs to a safe location
+# The configs are in the source directory at jlab_opt_control/cfgs
+RUN mkdir -p /app/soct_configs_default && \
+    cp -r /tmp/jlab/jlab_opt_control/cfgs/* /app/soct_configs_default/ && \
+    echo "Backed up SOCT default configs to /app/soct_configs_default" && \
+    ls -la /app/soct_configs_default/
+
+# Copy custom SOCT configs to temp location
+COPY orchestration/soct_configs /tmp/custom_soct_configs
+
+# Replace SOCT's default configs with custom ones
+# SOCT configs are in the source tree at /tmp/jlab/jlab_opt_control/cfgs/
+RUN echo "Replacing SOCT configs with custom configs..." && \
+    echo "Custom configs to install:" && \
+    ls -la /tmp/custom_soct_configs/ && \
+    echo "Copying to /tmp/jlab/jlab_opt_control/cfgs/" && \
+    cp -v /tmp/custom_soct_configs/* /tmp/jlab/jlab_opt_control/cfgs/ && \
+    echo "Custom SOCT configs installed successfully" && \
+    echo "Current configs in SOCT directory:" && \
+    ls -la /tmp/jlab/jlab_opt_control/cfgs/
+
+# Also keep a copy in /app/soct_configs for reference/documentation
+RUN mkdir -p /app/soct_configs && \
+    cp /tmp/custom_soct_configs/* /app/soct_configs/
+
+# Clean up temp custom configs directory (but keep /tmp/jlab for now)
+RUN rm -rf /tmp/custom_soct_configs
 
 # Copy all agent-specific requirements files
 COPY orchestration/containers/agent/*-requirements.txt ./
@@ -55,13 +80,26 @@ COPY orchestration/containers/agent/entrypoint.sh /entrypoint.sh
 COPY smocs ./smocs
 COPY orchestration/config.yaml ./config.yaml
 
-# Copy jlab configuration files for RL agents
-COPY orchestration/jlab_configs ./jlab_configs
-
 # Optional: copy SQL init script (agents can override this)
 COPY orchestration/containers/agent/init.sql /docker-entrypoint-initdb.d/init.sql
 
 # Set Python path
 ENV PYTHONPATH=/app
 
+# Add a verification step to confirm configs were copied and are accessible
+RUN echo "=== Configuration Verification ===" && \
+    echo "SOCT installation configs (replaced with custom):" && \
+    ls -lh /tmp/jlab/jlab_opt_control/cfgs/ && \
+    echo "" && \
+    echo "Custom configs backup in /app/soct_configs:" && \
+    ls -lh /app/soct_configs/ && \
+    echo "" && \
+    echo "Original SOCT configs backup in /app/soct_configs_default:" && \
+    ls -lh /app/soct_configs_default/ && \
+    echo "" && \
+    echo "Comparing custom keras_td3.cfg with original (if exists):" && \
+    (diff /app/soct_configs/keras_td3.cfg /app/soct_configs_default/keras_td3.cfg || echo "Files differ (this is expected)") && \
+    echo "=== Verification Complete ==="
+
 RUN chmod +x /entrypoint.sh
+

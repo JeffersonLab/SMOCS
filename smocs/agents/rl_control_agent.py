@@ -14,7 +14,7 @@ import smocs.control_plane # For custom environments
 from smocs.cores import AgentBase, KafkaConsumerBase, MLTrainingThreadBase, KafkaStreamingProcessBase
 from smocs.utils import ConfigLoader, setup_logging
 
-# JLab opt control imports
+# SOCT imports
 import jlab_opt_control.agents
 
 # Gymnasium for environment instantiation (utilized for SOCT agent init)
@@ -23,7 +23,7 @@ import gymnasium as gym
 class RLDataIngestThread(KafkaConsumerBase):
     """
     Data ingestion thread for RL control agent.
-    Consumes SARSA tuples from Kafka and stores to jlab agent buffer.
+    Consumes SARSA tuples from Kafka and stores to SOCT agent buffer.
     
     Thread Safety:
     - Acquires agent lock before calling agent.memory()
@@ -31,7 +31,7 @@ class RLDataIngestThread(KafkaConsumerBase):
     - Waits for inference before processing SARSA
     """
     
-    def __init__(self, agent_id: str, config: Dict[str, Any], jlab_agent: Any, 
+    def __init__(self, agent_id: str, config: Dict[str, Any], soct_agent: Any, 
                  agent_lock: threading.Lock, inference_done_event: threading.Event,
                  ingestion_done_event: threading.Event):
         """
@@ -40,14 +40,14 @@ class RLDataIngestThread(KafkaConsumerBase):
         Args:
             agent_id: Unique identifier for the parent agent
             config: Agent configuration dictionary
-            jlab_agent: Instance of jlab_opt_control agent
-            agent_lock: Shared lock for thread-safe access to jlab_agent
+            soct_agent: Instance of SOCT agent
+            agent_lock: Shared lock for thread-safe access to soct_agent
             inference_done_event: Event to wait for (inference completion)
             ingestion_done_event: Event to signal (ingestion completion)
         """
         self.agent_id = agent_id
         self.config = config
-        self.jlab_agent = jlab_agent
+        self.soct_agent = soct_agent
         self.agent_lock = agent_lock
         self.inference_done_event = inference_done_event  # Wait for this
         self.ingestion_done_event = ingestion_done_event  # Signal this
@@ -77,7 +77,7 @@ class RLDataIngestThread(KafkaConsumerBase):
     
     def process_message(self, message, topic, partition, offset) -> bool:
         """
-        Process SARSA tuple from Kafka and store to jlab agent buffer.
+        Process SARSA tuple from Kafka and store to SOCT agent buffer.
         
         Args:
             message: The message value (JSON string)
@@ -108,9 +108,6 @@ class RLDataIngestThread(KafkaConsumerBase):
                 # Clear the inference_done event so we wait next time
                 self.inference_done_event.clear()
                 logging.debug("PIPELINE STEP 2: DATA INGESTION - Cleared inference_done_event, proceeding with ingestion")
-                
-                # Small sleep to ensure log ordering
-                time.sleep(0.01)
             
             # Parse message
             if isinstance(message, bytes):
@@ -136,9 +133,6 @@ class RLDataIngestThread(KafkaConsumerBase):
                 logging.debug("PIPELINE STEP 2: DATA INGESTION - Successfully saved SARSA to buffer")
                 logging.debug(f"PIPELINE STEP 2: DATA INGESTION - Setting ingestion_done_event (experiences stored: {self.experiences_stored})")
                 self.ingestion_done_event.set()
-                
-                # Small sleep to ensure log ordering
-                time.sleep(0.01)
             
             return result
             
@@ -155,13 +149,13 @@ class RLDataIngestThread(KafkaConsumerBase):
         
         state, action, reward, next_state, done = sarsa_tuple
 
-        logging.info(f"SARSA Tuple #{self.experiences_stored}:")
-        logging.info(f"  State: {state}")
-        logging.info(f"  Action: {action}")
-        logging.info(f"  Reward: {reward:.3f}")
-        logging.info(f"  Next_State: {next_state}")
-        logging.info(f"  Done: {done}")
-        logging.info(f"  State vs Next_State diff: {np.linalg.norm(next_state - state):.3f}")
+        logging.debug(f"SARSA Tuple #{self.experiences_stored}:")
+        logging.debug(f"  State: {state}")
+        logging.debug(f"  Action: {action}")
+        logging.debug(f"  Reward: {reward:.3f}")
+        logging.debug(f"  Next_State: {next_state}")
+        logging.debug(f"  Done: {done}")
+        logging.debug(f"  State vs Next_State diff: {np.linalg.norm(next_state - state):.3f}")
     
 
         try:    
@@ -175,8 +169,8 @@ class RLDataIngestThread(KafkaConsumerBase):
                 if lock_wait_time > 0.05:  # 50ms threshold
                     logging.warning(f"RLDataIngestThread: Lock wait time: {lock_wait_time:.3f}s")
                 
-                # Store experience in jlab agent buffer
-                self.jlab_agent.memory((state, action, reward, next_state, done))
+                # Store experience in SOCT agent buffer
+                self.soct_agent.memory((state, action, reward, next_state, done))
                 
                 self.experiences_stored += 1
 
@@ -184,7 +178,7 @@ class RLDataIngestThread(KafkaConsumerBase):
             if self.experiences_stored % 100 == 0:
                 avg_lock_wait = np.mean(self.lock_wait_times[-100:]) if self.lock_wait_times else 0
                 logging.info(f"RLDataIngestThread: Stored {self.experiences_stored} experiences, "
-                            f"avg lock wait: {avg_lock_wait:.4f}s, buffer size: {self.jlab_agent.buffer.size()}, "
+                            f"avg lock wait: {avg_lock_wait:.4f}s, buffer size: {self.soct_agent.buffer.size()}, "
                             f"pipeline timeouts: {self.pipeline_wait_timeouts}")
             return True
         except Exception as e:
@@ -212,7 +206,7 @@ class RLDataIngestThread(KafkaConsumerBase):
             message_data: Parsed JSON message
 
         Returns:
-            Tuple of (state, action, reward, next_state, done) or None if parsing fails
+            Tuple of (state, action, reward, next_state, done, truncated) or None if parsing fails
         """
         try:
             channels = message_data.get('channels', {})
@@ -278,19 +272,19 @@ class RLDataIngestThread(KafkaConsumerBase):
 class RLTrainingThread(MLTrainingThreadBase):
     """
     ML training thread for RL control agent.
-    Trains the jlab agent when data is ready.
+    Trains the SOCT agent when data is ready.
     
     Thread Safety:
     - Waits for ingestion to complete before training
     - Signals when training is complete
     """
     
-    def __init__(self, agent_id: str, config: Dict[str, Any], jlab_agent: Any, 
+    def __init__(self, agent_id: str, config: Dict[str, Any], soct_agent: Any, 
                  agent_lock: threading.Lock, ingestion_done_event: threading.Event,
                  training_done_event: threading.Event, tensorboard_writer):
         self.agent_id = agent_id
         self.config = config
-        self.jlab_agent = jlab_agent
+        self.soct_agent = soct_agent
         self.agent_lock = agent_lock
         self.ingestion_done_event = ingestion_done_event  # Wait for this
         self.training_done_event = training_done_event    # Signal this
@@ -350,9 +344,6 @@ class RLTrainingThread(MLTrainingThreadBase):
                     self.ingestion_done_event.clear()
                     logging.debug("PIPELINE STEP 3: TRAINING - Cleared ingestion_done_event, proceeding with training")
                     
-                    # Small sleep to ensure log ordering
-                    time.sleep(0.01)
-                    
                     # Acquire lock and train
                     logging.debug("PIPELINE STEP 3: TRAINING - Attempting to acquire agent lock")
                     acquired = self.agent_lock.acquire(blocking=True, timeout=2.0)
@@ -363,19 +354,19 @@ class RLTrainingThread(MLTrainingThreadBase):
                             train_start = time.time()
                             
                             with self.tb_writer.as_default():
-                                self.jlab_agent.train()
+                                self.soct_agent.train()
                                 self.tb_writer.flush()
                             
                             train_duration = time.time() - train_start
                             self.training_updates += 1
                             
                             logging.debug(f"PIPELINE STEP 3: TRAINING - Training complete (duration: {train_duration:.3f}s, "
-                                       f"update #{self.training_updates}, buffer size: {self.jlab_agent.buffer.size()})")
+                                       f"update #{self.training_updates}, buffer size: {self.soct_agent.buffer.size()})")
                             
                             # Log periodically
                             if self.training_updates % 10 == 0:
                                 logging.info(f"RLTrainingThread: Completed {self.training_updates} training updates, "
-                                        f"buffer size: {self.jlab_agent.buffer.size()}, "
+                                        f"buffer size: {self.soct_agent.buffer.size()}, "
                                         f"pipeline timeouts: {self.pipeline_wait_timeouts}")
                         
                         finally:
@@ -385,9 +376,7 @@ class RLTrainingThread(MLTrainingThreadBase):
                         # Signal that training is done
                         logging.debug("PIPELINE STEP 3: TRAINING - Setting training_done_event")
                         self.training_done_event.set()
-                        
-                        # Small sleep to ensure log ordering
-                        time.sleep(0.01)
+
                     else:
                         logging.warning("RLTrainingThread: Failed to acquire lock within timeout")
                 
@@ -407,19 +396,19 @@ class RLTrainingThread(MLTrainingThreadBase):
     
     # Override base class abstract methods (we don't use them with the SOCT agents for now)
     def build_model(self):
-        """Not used - jlab agent manages its own models."""
+        """Not used - SOCT agent manages its own models."""
         pass
     
     def get_training_data(self) -> Optional[Any]:
-        """Not used - jlab agent manages its own buffer."""
+        """Not used - SOCT agent manages its own buffer."""
         return None
     
     def train_model(self, training_data: Any) -> Dict[str, Any]:
-        """Not used - jlab agent has its own train() method."""
+        """Not used - SOCT agent has its own train() method."""
         return {}
     
     def eval_model(self) -> Dict[str, Any]:
-        """Not used - jlab agent manages evaluation internally."""
+        """Not used - SOCT agent manages evaluation internally."""
         return {}
     
     def save_model(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
@@ -429,7 +418,7 @@ class RLTrainingThread(MLTrainingThreadBase):
 class RLInferenceThread(KafkaStreamingProcessBase):
     """
     ML inference thread for RL control agent.
-    Consumes states from Kafka, generates actions using jlab agent, publishes to Kafka.
+    Consumes states from Kafka, generates actions using SOCT agent, publishes to Kafka.
     
     Thread Safety:
     - Acquires agent lock before calling agent.action()
@@ -437,12 +426,12 @@ class RLInferenceThread(KafkaStreamingProcessBase):
     - Waits for training to complete before processing next state
     """
     
-    def __init__(self, agent_id: str, config: Dict[str, Any], jlab_agent: Any, 
+    def __init__(self, agent_id: str, config: Dict[str, Any], soct_agent: Any, 
                  agent_lock: threading.Lock, training_done_event: threading.Event,
                  inference_done_event: threading.Event, tensorboard_writer):
         self.agent_id = agent_id
         self.config = config
-        self.jlab_agent = jlab_agent
+        self.soct_agent = soct_agent
         self.agent_lock = agent_lock
         self.training_done_event = training_done_event  # Wait for this
         self.inference_done_event = inference_done_event  # Signal this
@@ -493,9 +482,6 @@ class RLInferenceThread(KafkaStreamingProcessBase):
                 logging.debug(f"PIPELINE STEP 1: INFERENCE - Training complete (waited {wait_duration:.3f}s)")
                 
                 logging.debug("PIPELINE STEP 1: INFERENCE - Proceeding with inference (will clear training_done_event after)")
-                
-                # Small sleep to ensure log ordering
-                time.sleep(0.01)
             
             # Parse message
             if isinstance(message, bytes):
@@ -532,21 +518,15 @@ class RLInferenceThread(KafkaStreamingProcessBase):
                 logging.debug("PIPELINE STEP 1: INFERENCE - Setting inference_done_event")
                 self.inference_done_event.set()
                 
-                # Small sleep to ensure log ordering
-                time.sleep(0.01)
-                
                 # NOW clear training_done_event so we wait for the next cycle
                 logging.debug("PIPELINE STEP 1: INFERENCE - Clearing training_done_event (ready for next cycle)")
                 self.training_done_event.clear()
-                
-                # Small sleep to ensure log ordering
-                time.sleep(0.01)
             
             # Log periodically
             if self.actions_generated % 100 == 0:
                 avg_lock_wait = np.mean(self.lock_wait_times[-100:]) if self.lock_wait_times else 0
                 logging.info(f"RLInferenceThread: Generated {self.actions_generated} actions, "
-                        f"avg lock wait: {avg_lock_wait:.4f}s, buffer size: {self.jlab_agent.buffer.size()}, "
+                        f"avg lock wait: {avg_lock_wait:.4f}s, buffer size: {self.soct_agent.buffer.size()}, "
                         f"pipeline timeouts: {self.pipeline_wait_timeouts}")
             
             # Sanitize topic name and return
@@ -581,7 +561,7 @@ class RLInferenceThread(KafkaStreamingProcessBase):
                 
                 action_start = time.time()
                 with self.tb_writer.as_default():
-                    action, _ = self.jlab_agent.action(state_tensor, train=self.train_mode)
+                    action, _ = self.soct_agent.action(state_tensor, train=self.train_mode)
                     self.tb_writer.flush()
                 
                 action_duration = time.time() - action_start
@@ -656,12 +636,12 @@ class RLInferenceThread(KafkaStreamingProcessBase):
 
 class RLControlAgent(AgentBase):
     """
-    RL Control Agent that wraps jlab_opt_control agents (TD3, SAC, etc.)
+    RL Control Agent that wraps SOCT agents (TD3, SAC, etc.)
     and interfaces with Gymnasium Kafka wrapper.
     
     Architecture:
     - Three threads: data ingestion, training, inference
-    - Shared jlab_agent instance protected by single lock
+    - Shared soct_agent instance protected by single lock
     - Inference and data ingestion use blocking lock (critical path)
     - Training uses non-blocking lock (opportunistic)
     """
@@ -691,8 +671,8 @@ class RLControlAgent(AgentBase):
         
         # Extract configuration
         self.environment_id = self.agent_config.get('environment', 'CartPole-v1')
-        self.jlab_agent_type = self.agent_config.get('jlab_agent_type', 'KerasTD3-v0')
-        self.jlab_agent_config_path = self.agent_config.get('jlab_agent_config_path')
+        self.soct_agent_type = self.agent_config.get('soct_agent_type', 'KerasTD3-v0')
+        self.soct_agent_config_path = self.agent_config.get('soct_agent_config_path')
         self.buffer_type = self.agent_config.get('buffer_type', 'ER-v0')
         self.buffer_size = self.agent_config.get('buffer_size', 1000000)
         
@@ -700,18 +680,18 @@ class RLControlAgent(AgentBase):
         self.enabled_threads = self.agent_config.get('enabled_threads', ['ingest', 'training', 'inference'])
         
         logging.info(f"RLControlAgent: Initializing with environment: {self.environment_id}")
-        logging.info(f"RLControlAgent: JLab agent type: {self.jlab_agent_type}")
+        logging.info(f"RLControlAgent: SOCT agent type: {self.soct_agent_type}")
         logging.info(f"RLControlAgent: Buffer type: {self.buffer_type}, size: {self.buffer_size}")
         logging.info(f"RLControlAgent: Enabled threads: {self.enabled_threads}")
         
         # Create local environment instance for initialization
         self.env = self._create_local_environment()
         
-        # Create jlab agent instance
-        self.jlab_agent = self._create_jlab_agent()
+        # Create SOCT agent instance
+        self.soct_agent = self._create_soct_agent()
         
-        # Create shared lock for thread-safe access to jlab_agent
-        self.jlab_agent_lock = threading.Lock()
+        # Create shared lock for thread-safe access to soct_agent
+        self.soct_agent_lock = threading.Lock()
 
         #  Three-way synchronization events for default RL blcoking training pipeline
         self.inference_done_event = threading.Event()
@@ -748,12 +728,12 @@ class RLControlAgent(AgentBase):
             logging.error(f"RLControlAgent: Failed to create environment '{self.environment_id}': {e}")
             raise
     
-    def _create_jlab_agent(self):
+    def _create_soct_agent(self):
         """
-        Create an instance of the jlab_opt_control agent.
+        Create an instance of the SOCT agent.
         
         Returns:
-            jlab_opt_control agent instance (e.g., KerasTD3)
+            SOCT agent instance (e.g., KerasTD3)
         """
         try:
             # Get logdir from config or use default
@@ -765,44 +745,21 @@ class RLControlAgent(AgentBase):
             # Ensure logdir exists
             os.makedirs(logdir, exist_ok=True)
             
-            logging.info(f"RLControlAgent: Creating jlab agent with logdir: {logdir}")
+            logging.info(f"RLControlAgent: Creating SOCT agent with logdir: {logdir}")
             
-            # Prepare config path
+            # Prepare config filename (just the filename, not full path)
             cfg_arg = None
-            if self.jlab_agent_config_path:
-                # If it's already an absolute path, use it directly
-                if os.path.isabs(self.jlab_agent_config_path):
-                    cfg_path = self.jlab_agent_config_path
-                else:
-                    # Extract just the filename
-                    config_filename = os.path.basename(self.jlab_agent_config_path)
-                    
-                    # Look in these locations in order:
-                    # 1. /app/jlab_configs/ (user-provided configs)
-                    # 2. /app/jlab_configs_default/ (default jlab configs)
-                    search_paths = [
-                        os.path.join('/app/jlab_configs', config_filename),
-                        os.path.join('/app/jlab_configs_default', config_filename)
-                    ]
-                    
-                    cfg_path = None
-                    for path in search_paths:
-                        if os.path.exists(path):
-                            cfg_path = path
-                            break
-                    
-                    if cfg_path is None:
-                        raise FileNotFoundError(
-                            f"JLab config file '{config_filename}' not found in any of: {search_paths}"
-                        )
-                
-                logging.info(f"RLControlAgent: Using jlab config: {cfg_path}")
-                cfg_arg = cfg_path
+            if self.soct_agent_config_path:
+                # Extract just the filename - SOCT will find it in its own cfgs/ directory
+                cfg_arg = os.path.basename(self.soct_agent_config_path)
+                logging.info(f"RLControlAgent: Using SOCT config: {cfg_arg}")
             
-            # Create jlab agent
-            # Note: jlab agents.make() expects: (agent_id, env, logdir, buffer_type, buffer_size, cfg)
-            jlab_agent = jlab_opt_control.agents.make(
-                self.jlab_agent_type,
+            # Create SOCT agent
+            # Note: cfg_arg is just a filename (e.g., "keras_td3.cfg")
+            # SOCT will look for it in its installation's cfgs/ directory
+            # which now contains our custom configs
+            soct_agent = jlab_opt_control.agents.make(
+                self.soct_agent_type,
                 env=self.env,
                 logdir=logdir,
                 buffer_type=self.buffer_type,
@@ -813,22 +770,22 @@ class RLControlAgent(AgentBase):
             self.tensorboard_writer = tf.summary.create_file_writer(f"{logdir}/metrics")
             logging.info(f"RLControlAgent: Created writer reference for {logdir}/metrics")
 
-            logging.info(f"RLControlAgent: Successfully created jlab agent: {self.jlab_agent_type}")
-            logging.info(f"RLControlAgent: Buffer capacity: {jlab_agent.buffer.buffer_capacity}")
-            logging.info(f"RLControlAgent: Warmup size: {jlab_agent.warmup_size}")
-            logging.info(f"RLControlAgent: Batch size: {jlab_agent.batch_size}")
+            logging.info(f"RLControlAgent: Successfully created SOCT agent: {self.soct_agent_type}")
+            logging.info(f"RLControlAgent: Buffer capacity: {soct_agent.buffer.buffer_capacity}")
+            logging.info(f"RLControlAgent: Warmup size: {soct_agent.warmup_size}")
+            logging.info(f"RLControlAgent: Batch size: {soct_agent.batch_size}")
 
             # Debug: Check what bounds were set
-            logging.info(f"RLControlAgent: JLab agent action bounds:")
-            logging.info(f"  lower_bound: {jlab_agent.lower_bound}")
-            logging.info(f"  upper_bound: {jlab_agent.upper_bound}")
+            logging.info(f"RLControlAgent: SOCT agent action bounds:")
+            logging.info(f"  lower_bound: {soct_agent.lower_bound}")
+            logging.info(f"  upper_bound: {soct_agent.upper_bound}")
             logging.info(f"  Environment action_space.low: {self.env.action_space.low}")
             logging.info(f"  Environment action_space.high: {self.env.action_space.high}")
             
-            return jlab_agent
+            return soct_agent
             
         except Exception as e:
-            logging.error(f"RLControlAgent: Failed to create jlab agent: {e}")
+            logging.error(f"RLControlAgent: Failed to create SOCT agent: {e}")
             raise
     
     def create_data_ingest_component(self):
@@ -837,8 +794,8 @@ class RLControlAgent(AgentBase):
             return RLDataIngestThread(
                 self.agent_id,
                 self.agent_config,
-                self.jlab_agent,
-                self.jlab_agent_lock,
+                self.soct_agent,
+                self.soct_agent_lock,
                 self.inference_done_event,  # Wait for this
                 self.ingestion_done_event   # Signal this   
             )
@@ -850,8 +807,8 @@ class RLControlAgent(AgentBase):
             return RLTrainingThread(
                 self.agent_id,
                 self.agent_config,
-                self.jlab_agent,
-                self.jlab_agent_lock,
+                self.soct_agent,
+                self.soct_agent_lock,
                 self.ingestion_done_event,  # Wait for this
                 self.training_done_event,   # Signal this
                 self.tensorboard_writer
@@ -864,8 +821,8 @@ class RLControlAgent(AgentBase):
             return RLInferenceThread(
                 self.agent_id,
                 self.agent_config,
-                self.jlab_agent,
-                self.jlab_agent_lock,
+                self.soct_agent,
+                self.soct_agent_lock,
                 self.training_done_event,   # Wait for this
                 self.inference_done_event,  # Signal this
                 self.tensorboard_writer
@@ -885,7 +842,7 @@ class RLControlAgent(AgentBase):
         """
         config = custom_config if custom_config is not None else {
             'agent_type': 'RLControlAgent',
-            'jlab_agent_type': self.jlab_agent_type,
+            'soct_agent_type': self.soct_agent_type,
             'environment': self.environment_id,
             'buffer_type': self.buffer_type,
             'buffer_size': self.buffer_size,
@@ -896,8 +853,8 @@ class RLControlAgent(AgentBase):
             'registration_time': time.time(),
             'status': 'starting',
             'agent_class': self.__class__.__name__,
-            'jlab_agent_warmup_size': self.jlab_agent.warmup_size,
-            'jlab_agent_batch_size': self.jlab_agent.batch_size
+            'soct_agent_warmup_size': self.soct_agent.warmup_size,
+            'soct_agent_batch_size': self.soct_agent.batch_size
         }
         
         return config, info

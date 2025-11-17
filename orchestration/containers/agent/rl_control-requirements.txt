@@ -1,7 +1,7 @@
 # RL Control Agent Requirements
-# These must match jlab_opt_control requirements
+# These must match SOCT requirements
 
-# Core ML dependencies (matching jlab_opt_control requirements.txt)
+# Core ML dependencies (matching SOCT requirements.txt)
 tensorflow==2.15.*
 tensorflow-probability==0.23.0
 numpy==1.26.4

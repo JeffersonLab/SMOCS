@@ -129,8 +129,8 @@ autoencoder_agent2:
 
 rl_control_agent1:
   environment: "Pendulum-v1"
-  jlab_agent_type: "KerasTD3-v0"
-  jlab_agent_config_path: "/app/jlab_configs/keras_td3.cfg"
+  soct_agent_type: "KerasTD3-v0"
+  soct_agent_config_path: "keras_td3.cfg"
   buffer_type: "ER-v0"
   buffer_size: 1000000
   enabled_threads: ['ingest', 'training', 'inference']

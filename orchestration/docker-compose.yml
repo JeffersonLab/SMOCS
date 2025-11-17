@@ -190,7 +190,7 @@ services:
       - "6006:6006"  # TensorBoard port
     volumes:
       - mysql-data-rl1:/var/lib/mysql
-      - jlab-configs:/app/jlab_configs:ro  # Read-only mount for jlab configs
+      - soct-configs:/app/soct_configs:ro  # Read-only mount for soct configs
       - ./tb-logs:/app/logs:rw  # Mount for RL agent logs and models
     depends_on:
       kafka-broker:
@@ -220,7 +220,7 @@ volumes:
   mysql-data-ae1:
   mysql-data-ae2:
   mysql-data-rl1:  
-  jlab-configs: 
+  soct-configs: 
   rl-logs-1: 
 
 networks:
