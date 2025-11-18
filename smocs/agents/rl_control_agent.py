@@ -147,14 +147,15 @@ class RLDataIngestThread(KafkaConsumerBase):
     def _save_agent_buffer(self, sarsa_tuple):
         """ Function to save the SARSA tuple to the agents buffer, returns True is successful else error out """
         
-        state, action, reward, next_state, done = sarsa_tuple
+        state, action, reward, next_state, terminated, truncated = sarsa_tuple
 
         logging.debug(f"SARSA Tuple #{self.experiences_stored}:")
         logging.debug(f"  State: {state}")
         logging.debug(f"  Action: {action}")
         logging.debug(f"  Reward: {reward:.3f}")
         logging.debug(f"  Next_State: {next_state}")
-        logging.debug(f"  Done: {done}")
+        logging.debug(f"  Terminated: {terminated}")
+        logging.debug(f"  Turncated: {truncated}")
         logging.debug(f"  State vs Next_State diff: {np.linalg.norm(next_state - state):.3f}")
     
 
@@ -170,6 +171,8 @@ class RLDataIngestThread(KafkaConsumerBase):
                     logging.warning(f"RLDataIngestThread: Lock wait time: {lock_wait_time:.3f}s")
                 
                 # Store experience in SOCT agent buffer
+                # Create done here as that is what current SOCT utilizes in the memory
+                done = terminated or truncated
                 self.soct_agent.memory((state, action, reward, next_state, done))
                 
                 self.experiences_stored += 1
@@ -220,7 +223,7 @@ class RLDataIngestThread(KafkaConsumerBase):
             action_json = channels.get('action')
             reward = channels.get('reward')
             next_state_json = channels.get('next_state')
-            done = channels.get('done', False)
+            terminated = channels.get('done', False)
             truncated = channels.get('truncated', False)
             
             # Validate all components exist
@@ -236,16 +239,24 @@ class RLDataIngestThread(KafkaConsumerBase):
             reward = float(reward)
             next_state = np.array(next_state_json, dtype=np.float32)
             
-            # Combine done and truncated into single done flag
-            done = bool(done or truncated)
+            # Keep them split
+            terminated = bool(terminated)
+            truncated = bool(truncated)
             
-            # Validate shapes
-            if state.ndim != 1 or next_state.ndim != 1:
-                logging.error(f"RLDataIngestThread: Invalid state dimensions: state={state.shape}, next_state={next_state.shape}")
+            # Validate shapes against agent's expected dimensions
+            expected_state_shape = (self.soct_agent.num_states,)
+            expected_action_shape = (self.soct_agent.num_actions,)
+            
+            if state.shape != expected_state_shape:
+                logging.error(f"RLDataIngestThread: Invalid state shape: {state.shape}, expected {expected_state_shape}")
                 return None
             
-            if action.ndim != 1:
-                logging.error(f"RLDataIngestThread: Invalid action dimension: {action.shape}")
+            if next_state.shape != expected_state_shape:
+                logging.error(f"RLDataIngestThread: Invalid next_state shape: {next_state.shape}, expected {expected_state_shape}")
+                return None
+            
+            if action.shape != expected_action_shape:
+                logging.error(f"RLDataIngestThread: Invalid action shape: {action.shape}, expected {expected_action_shape}")
                 return None
             
             # Validate dtypes are preserved
@@ -261,7 +272,7 @@ class RLDataIngestThread(KafkaConsumerBase):
                 logging.warning(f"RLDataIngestThread: Next_state dtype is {next_state.dtype}, expected float32. Attempting converstion")
                 next_state = next_state.astype(np.float32)
             
-            return (state, action, reward, next_state, done)
+            return (state, action, reward, next_state, terminated, truncated)
             
         except Exception as e:
             logging.error(f"RLDataIngestThread: Error parsing SARSA message: {e}")
@@ -295,6 +306,7 @@ class RLTrainingThread(MLTrainingThreadBase):
         self.check_interval_ms = training_config.get('check_interval_ms', 10)
         self.use_pipeline_sync = training_config.get('use_pipeline_sync', False)
         self.pipeline_timeout = training_config.get('pipeline_timeout_sec', 10.0)
+        self.lock_timeout = training_config.get('lock_timeout_sec', 2.0)
         
         # Metrics
         self.training_updates = 0
@@ -346,7 +358,7 @@ class RLTrainingThread(MLTrainingThreadBase):
                     
                     # Acquire lock and train
                     logging.debug("PIPELINE STEP 3: TRAINING - Attempting to acquire agent lock")
-                    acquired = self.agent_lock.acquire(blocking=True, timeout=2.0)
+                    acquired = self.agent_lock.acquire(blocking=True, timeout=self.lock_timeout)
                     
                     if acquired:
                         try:
@@ -617,8 +629,10 @@ class RLInferenceThread(KafkaStreamingProcessBase):
             state = np.array(state_json, dtype=np.float32)
 
             # Validate dimensions (only using BOX for now)
-            if state.ndim != 1:
-                logging.error(f"RLInferenceThread: Invalid state dimension: {state.shape}, expected 1D array")
+            expected_state_shape = (self.soct_agent.num_states,)
+            
+            if state.shape != expected_state_shape:
+                logging.error(f"RLInferenceThread: Invalid state shape: {state.shape}, expected {expected_state_shape}")
                 return None
             
             # Validate dtype

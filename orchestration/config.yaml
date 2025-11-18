@@ -145,6 +145,7 @@ rl_control_agent1:
     check_interval_ms: 10
     use_pipeline_sync: true
     pipeline_timeout_sec: 100.0
+    lock_timeout_sec: 2.0    
   inference:
     train_mode: true
     use_pipeline_sync: true
