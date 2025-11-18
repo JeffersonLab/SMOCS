@@ -29,18 +29,23 @@ epics:
       - IPMK401.PHAS
       
 gymnasium:
+  # Environment settings
   environment: "Pendulum-v1"
+  render_mode: null  # Options: null, 'human', 'rgb_array'
+  max_episode_steps: null  # null uses environment default
+  
+  # Kafka topics
   input_topic: "gymnasium-action"
   output_topics:
     sarsa: "gymnasium-sarsa"
     state: "gymnasium-state"
     decomposed: "gymnasium-output"
-  blocking_mode: true  # Must be true for RL agent
-  default_action_strategy: "random"
-  step_delay: 0.0
-  reset_on_start: true
-  max_episode_steps: 200
-  render_mode: null
+  
+  # Operation mode
+  blocking_mode: false  # true = wait for Kafka actions, false = use default actions
+  default_action_strategy: "random"  # Options: 'random', 'zero'
+  step_delay: 0.0  # Delay in seconds between steps
+  reset_on_start: true  # Reset environment on startup
 
 kafka:
   auto_create: true
