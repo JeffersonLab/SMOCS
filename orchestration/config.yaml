@@ -52,13 +52,10 @@ kafka:
   partitions: 1
   replication_factor: 1
 
-# Autoencoders for industry environment
 autoencoder_agent1:
-  # Explicit preprocessing pipeline - executed in order
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  # For no preprocessing, use: preprocessing_pipeline: []
   window_size: 5
   min_training_samples: 100
   encoder_dims: [64, 32, 16]
@@ -71,16 +68,16 @@ autoencoder_agent1:
       channels:
       - state_0
       - state_1
-      
+      - state_2
       bounds:
-      - [0.5, 2.0]
-      - [0.0, 1000.0]
-      
+      - [-1.0, 1.0]
+      - [-1.0, 1.0]
+      - [-8.0, 8.0]
   model_output:
       channels:
       - state_0
       - state_1
-
+      - state_2
   kafka_topics:
     input: "gymnasium-output"
     output: "autoencoder1-anomalies"
