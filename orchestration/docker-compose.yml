@@ -70,13 +70,14 @@ services:
     restart: unless-stopped
 
   epics-kafka-producer:
-    extends: source-kafka-producer
-    profiles: ["epics"]
-    platform: linux/amd64
-    environment:
-      EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
-      SMOCS_LOG_LEVEL: INFO
-    command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
+      extends: source-kafka-producer
+      profiles: ["epics"]
+      platform: linux/amd64
+      environment:
+        EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
+        SMOCS_LOG_LEVEL: DEBUG
+        ENABLE_CLI_CONTROL: "true"
+      command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
 
   mqtt-kafka-producer:
     extends: source-kafka-producer
