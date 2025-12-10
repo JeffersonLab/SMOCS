@@ -10,7 +10,7 @@ import time
 import threading
 
 from smocs.cores import KafkaProducerBase
-from smocs.utils import setup_logging, EpicsCLIController
+from smocs.utils import setup_logging, CLIController
 
 
 class EpicsKafkaProducer(KafkaProducerBase):
@@ -51,7 +51,13 @@ class EpicsKafkaProducer(KafkaProducerBase):
         if os.getenv('ENABLE_CLI_CONTROL', 'false').lower() == 'true':
             logging.info("CLI control is enabled, initializing...")
             self.pv_lock = threading.Lock()
-            self.cli_controller = EpicsCLIController(self)
+            
+            # Use generic CLIController with EPICS-specific socket path
+            self.cli_controller = CLIController(
+                target_object=self,
+                socket_path='/tmp/epics-producer.sock',
+                controller_name='epics-producer'
+            )
             self._register_cli_commands()
         else:
             logging.info("CLI control is disabled")

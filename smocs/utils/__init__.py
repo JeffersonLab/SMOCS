@@ -4,7 +4,7 @@ __all__ = [
     "validate_message_format",
     "ChannelFilter",
     "setup_logging",
-    "EpicsCLIController"
+    "CLIController"
 ]
 
 def __getattr__(name):
@@ -23,7 +23,7 @@ def __getattr__(name):
     elif name == "setup_logging":
         from .logging_config import setup_logging
         return setup_logging
-    elif name == "EpicsCLIController":
-        from .epics_cli_controller import EpicsCLIController
-        return EpicsCLIController
+    elif name == "CLIController":
+        from .cli_controller import CLIController
+        return CLIController
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

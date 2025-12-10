@@ -5,34 +5,37 @@ import logging
 import os
 
 
-class EpicsCLIController:
+class CLIController:
     """
-    CLI controller for EPICS producer using Unix socket communication.
-    Handles command registration, socket server, and command routing.
+    Generic CLI controller using Unix socket communication.
+    Can be used by any component that needs CLI control.
     """
     
-    def __init__(self, target_object):
+    def __init__(self, target_object, socket_path, controller_name="controller"):
         """
         Initialize the CLI controller.
         
         Args:
-            target_object: The object (EpicsKafkaProducer) to control
+            target_object: The object to control (EpicsKafkaProducer, MQTTProducer, etc.)
+            socket_path: Path to Unix socket (e.g., '/tmp/epics-producer.sock')
+            controller_name: Name for logging purposes
         """
         self.target = target_object
         self.commands = {}
         self.running = False
         self.thread = None
-        self.socket_path = '/tmp/epics-producer.sock'
+        self.socket_path = socket_path
+        self.controller_name = controller_name
         self.server_socket = None
         
-        logging.info("EpicsCLIController initialized")
+        logging.info(f"CLIController '{controller_name}' initialized with socket: {socket_path}")
     
     def register_command(self, name, handler, help_text):
         """
         Register a CLI command.
         
         Args:
-            name: Command name (e.g., 'add_pv')
+            name: Command name (e.g., 'add_pv', 'add_topic')
             handler: Method to call when command is received
             help_text: Description of the command
         """
@@ -40,7 +43,7 @@ class EpicsCLIController:
             'handler': handler,
             'help': help_text
         }
-        logging.debug(f"Registered CLI command: {name}")
+        logging.debug(f"CLIController '{self.controller_name}': Registered command '{name}'")
     
     def start(self):
         """
@@ -62,37 +65,37 @@ class EpicsCLIController:
             # Set socket permissions
             os.chmod(self.socket_path, 0o666)
             
-            logging.info(f"CLI control socket listening on {self.socket_path}")
+            logging.info(f"CLIController '{self.controller_name}': Socket listening on {self.socket_path}")
             
             # Start background thread
             self.running = True
             self.thread = threading.Thread(target=self._socket_server_loop, daemon=True)
             self.thread.start()
             
-            logging.info("CLI control server started")
+            logging.info(f"CLIController '{self.controller_name}': Server started")
             
         except Exception as e:
-            logging.error(f"Failed to start CLI control server: {e}")
-            raise  # Fatal - producer should not start without CLI if enabled
+            logging.error(f"CLIController '{self.controller_name}': Failed to start: {e}")
+            raise  # Fatal - component should not start without CLI if enabled
     
     def stop(self):
         """Stop the CLI control server and clean up resources."""
-        logging.info("Stopping CLI control server...")
+        logging.info(f"CLIController '{self.controller_name}': Stopping...")
         self.running = False
         
         if self.server_socket:
             try:
                 self.server_socket.close()
             except Exception as e:
-                logging.error(f"Error closing server socket: {e}")
+                logging.error(f"CLIController '{self.controller_name}': Error closing socket: {e}")
         
         if os.path.exists(self.socket_path):
             try:
                 os.remove(self.socket_path)
             except Exception as e:
-                logging.error(f"Error removing socket file: {e}")
+                logging.error(f"CLIController '{self.controller_name}': Error removing socket file: {e}")
         
-        logging.info("CLI control server stopped")
+        logging.info(f"CLIController '{self.controller_name}': Stopped")
     
     def _socket_server_loop(self):
         """Main loop for accepting socket connections and processing commands."""
@@ -123,7 +126,7 @@ class EpicsCLIController:
                     client_socket.sendall(response_json.encode('utf-8'))
                     
                 except Exception as e:
-                    logging.error(f"Error handling client connection: {e}")
+                    logging.error(f"CLIController '{self.controller_name}': Error handling client: {e}")
                     error_response = {
                         'status': 'error',
                         'message': str(e)
@@ -138,7 +141,7 @@ class EpicsCLIController:
                     
             except Exception as e:
                 if self.running:
-                    logging.error(f"Error in socket server loop: {e}")
+                    logging.error(f"CLIController '{self.controller_name}': Error in server loop: {e}")
     
     def _handle_command(self, command_dict):
         """
@@ -173,7 +176,7 @@ class EpicsCLIController:
             handler = self.commands[command]['handler']
             return handler(command_dict)
         except Exception as e:
-            logging.error(f"Error executing command '{command}': {e}")
+            logging.error(f"CLIController '{self.controller_name}': Error executing '{command}': {e}")
             return {
                 'status': 'error',
                 'message': f'Command failed: {str(e)}'
