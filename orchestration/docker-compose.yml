@@ -125,7 +125,7 @@ services:
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
       PYTHONPATH: /app
-      SMOCS_LOG_LEVEL: INFO
+      SMOCS_LOG_LEVEL: CRITICAL
     networks:
       - kafka-net
     command: ["sh", "-c", "sleep 15 && exec python -m smocs.consumers.influxdb_kafka_consumer"]
@@ -176,11 +176,50 @@ services:
     volumes:
       - mysql-data-ae2:/var/lib/mysql
 
+  rl-control-agent1:
+    extends: agent
+    profiles: ["rl1"]
+    environment:
+      AGENT_TYPE: rl_control
+      AGENT_CONFIG: rl_control_agent1
+      SMOCS_LOG_LEVEL: INFO
+    ports:
+      - "3308:3306"
+      - "6006:6006"  # TensorBoard port
+    volumes:
+      - mysql-data-rl1:/var/lib/mysql
+      - soct-configs:/app/soct_configs:ro  # Read-only mount for soct configs
+      - ./tb-logs:/app/logs:rw  # Mount for RL agent logs and models
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+      gymnasium-kafka-controller:
+        condition: service_started
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    profiles: ["ui"]
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-broker:9092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    networks:
+      - kafka-net
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+        
 volumes:
   influxdb-data:
   grafana-storage:
   mysql-data-ae1:
   mysql-data-ae2:
+  mysql-data-rl1:  
+  soct-configs: 
+  rl-logs-1: 
 
 networks:
   kafka-net:
