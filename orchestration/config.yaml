@@ -84,11 +84,9 @@ autoencoder_agent1:
     training_output: "autoencoder1-training-results"
 
 autoencoder_agent2:
-  # Explicit preprocessing pipeline - executed in order
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  # For no preprocessing, use: preprocessing_pipeline: []
   window_size: 5
   min_training_samples: 100
   encoder_dims: [64, 32, 16]
@@ -99,22 +97,66 @@ autoencoder_agent2:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - state_2
-      - state_3
-      
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+      - IPMK203.PHAS
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IPMK101.PHAS
+      - IPMK401.XPOS
+      - IPMK401.YPOS
+      - IPMK401.PHAS
       bounds:
-      - [0.0, 1.0]
-      - [0.5, 2.0]
-      
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
+      - [-10.0, 10.0]
   model_output:
       channels:
-      - state_2
-      - state_3
-
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+      - IPMK203.PHAS
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IPMK101.PHAS
+      - IPMK401.XPOS
+      - IPMK401.YPOS
+      - IPMK401.PHAS
   kafka_topics:
-    input: "gymnasium-output"
+    input: "CEBAF"
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
 
+rl_control_agent1:
+  environment: "Pendulum-v1"
+  soct_agent_type: "KerasTD3-v0"
+  soct_agent_config_path: "keras_td3.cfg"
+  buffer_type: "ER-v0"
+  buffer_size: 1000000
+  enabled_threads: ['ingest', 'training', 'inference']
+  kafka_topics:
+    input_sarsa: "gymnasium-sarsa"
+    input_state: "gymnasium-state"
+    output_action: "gymnasium-action"
+  data_ingest:
+    use_pipeline_sync: true
+    pipeline_timeout_sec: 100.0
+  training:
+    check_interval_ms: 10
+    use_pipeline_sync: true
+    pipeline_timeout_sec: 100.0
+    lock_timeout_sec: 2.0    
+  inference:
+    train_mode: true
+    use_pipeline_sync: true
+    pipeline_timeout_sec: 100.0
+    log_lock_wait_threshold_ms: 100
+  logdir: "./logs/rl_agent1"
+
 project:
-  name: "smocs-gymnasium-proxy-accelerator"
+  name: "smocs-gymnasium-rl-control"
