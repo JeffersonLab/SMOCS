@@ -104,6 +104,134 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         logging.info(f"AEMLTrainingThread: Initialized with preprocessing pipeline: {pipeline_info}")
         
         super().__init__(agent_id, config)
+        
+        # Load existing model if available (after super().__init__ which sets up DB)
+        self.load_existing_model()
+    
+    def load_existing_model(self):
+        """
+        Load existing model from filesystem if available.
+        Validates preprocessing pipeline compatibility.
+        """
+        try:
+            models_dir = "/app/models"
+            latest_file = f"{models_dir}/latest_model.json"
+            
+            # Check if models directory and metadata exist
+            if not os.path.exists(models_dir):
+                logging.info("AEMLTrainingThread: No models directory found, starting fresh")
+                return
+            
+            if not os.path.exists(latest_file):
+                logging.info("AEMLTrainingThread: No existing model metadata found, starting fresh")
+                return
+            
+            # Read model metadata
+            with open(latest_file, 'r') as f:
+                metadata = json.load(f)
+            
+            model_file = f"{models_dir}/{metadata['model_file']}"
+            
+            # Check if model file exists
+            if not os.path.exists(model_file):
+                logging.error(f"AEMLTrainingThread: Metadata references missing model file: {model_file}")
+                logging.info("AEMLTrainingThread: Starting fresh")
+                return
+            
+            # Validate preprocessing pipeline compatibility
+            saved_pipeline = metadata.get('preprocessing_pipeline', {})
+            current_pipeline = self.preprocessing_manager.get_pipeline_info()
+            
+            if not self._validate_pipeline_compatibility(saved_pipeline, current_pipeline):
+                logging.error("AEMLTrainingThread: Preprocessing pipeline mismatch detected")
+                logging.error(f"  Saved pipeline: {saved_pipeline}")
+                logging.error(f"  Current pipeline: {current_pipeline}")
+                logging.info("AEMLTrainingThread: Starting fresh model due to incompatible preprocessing")
+                return
+            
+            # Validate architecture compatibility
+            saved_arch = metadata.get('architecture_config', {})
+            if not self._validate_architecture_compatibility(saved_arch):
+                logging.error("AEMLTrainingThread: Model architecture mismatch detected")
+                logging.error(f"  Saved config: {saved_arch}")
+                logging.error(f"  Current config: window_size={self.window_size}, encoder_dims={self.encoder_dims}")
+                logging.info("AEMLTrainingThread: Starting fresh model due to incompatible architecture")
+                return
+            
+            # Load the model
+            logging.info(f"AEMLTrainingThread: Loading existing model from {model_file}")
+            self.model = tf.keras.models.load_model(model_file)
+            self.input_dim = metadata['input_dim']
+            
+            # Restore training state
+            self.last_training_count = metadata.get('last_training_count', 0)
+            
+            logging.info(f"AEMLTrainingThread: Successfully loaded model v{metadata['version']}")
+            logging.info(f"  Input dim: {self.input_dim}")
+            logging.info(f"  Last training count: {self.last_training_count}")
+            logging.info(f"  Will resume from sample {self.last_training_count + 1}")
+            
+        except json.JSONDecodeError as e:
+            logging.error(f"AEMLTrainingThread: Invalid model metadata JSON: {e}")
+            logging.info("AEMLTrainingThread: Starting fresh")
+        except Exception as e:
+            logging.error(f"AEMLTrainingThread: Error loading existing model: {e}")
+            logging.info("AEMLTrainingThread: Starting fresh")
+    
+    def _validate_pipeline_compatibility(self, saved_pipeline: Dict, current_pipeline: Dict) -> bool:
+        """
+        Validate that saved and current preprocessing pipelines match.
+        
+        Args:
+            saved_pipeline: Pipeline info from saved model metadata
+            current_pipeline: Current pipeline info from preprocessing manager
+            
+        Returns:
+            True if compatible, False otherwise
+        """
+        # Check processor count
+        if saved_pipeline.get('processor_count') != current_pipeline.get('processor_count'):
+            return False
+        
+        # Check processor names and order
+        saved_processors = saved_pipeline.get('processors', [])
+        current_processors = current_pipeline.get('processors', [])
+        
+        if saved_processors != current_processors:
+            return False
+        
+        # Check window size
+        saved_window = saved_pipeline.get('window_size')
+        current_window = self.window_size
+        
+        # Window size might not be in old metadata, so only check if present
+        if saved_window is not None and saved_window != current_window:
+            logging.warning(f"AEMLTrainingThread: Window size mismatch: saved={saved_window}, current={current_window}")
+            return False
+        
+        return True
+    
+    def _validate_architecture_compatibility(self, saved_arch: Dict) -> bool:
+        """
+        Validate that saved and current model architectures match.
+        
+        Args:
+            saved_arch: Architecture config from saved model metadata
+            
+        Returns:
+            True if compatible, False otherwise
+        """
+        # Check encoder dimensions
+        saved_encoder = saved_arch.get('encoder_dims', [])
+        if saved_encoder != self.encoder_dims:
+            return False
+        
+        # Check window size
+        saved_window = saved_arch.get('window_size')
+        if saved_window is not None and saved_window != self.window_size:
+            return False
+        
+        return True
     
     def build_model(self, input_dim: int):
         """
@@ -216,13 +344,13 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         Data is already preprocessed by the pipeline.
         """
         try:
-            # Build model if not exists
+            # Build model if not exists (first training or fresh start)
             if self.model is None:
                 input_dim = training_data.shape[1]
                 self.build_model(input_dim)
             
             logging.info(f"AEMLTrainingThread: Training with preprocessed data shape: {training_data.shape}")
-            logging.info(f"AEMLTrainingThread: Training starting")
+            logging.info(f"AEMLTrainingThread: Training starting (continuing from existing model: {self.model is not None})")
            
             # Train autoencoder (data already preprocessed by pipeline)
             history = self.model.fit(
@@ -404,7 +532,8 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 'training_metrics': model_metrics,
                 'eval_metrics': eval_results,
                 'timestamp': time.time(),
-                'preprocessing_pipeline': self.preprocessing_manager.get_pipeline_info()
+                'preprocessing_pipeline': self.preprocessing_manager.get_pipeline_info(),
+                'last_training_count': self.last_training_count  # NEW: Save training state
             }
             
             # Save metadata to temporary file
