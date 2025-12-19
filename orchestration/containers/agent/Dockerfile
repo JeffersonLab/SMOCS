@@ -18,6 +18,13 @@ RUN apt-get update && \
     libgl1 \
     curl \
     git \
+    libgl1-mesa-dev \
+    libgl1-mesa-glx \
+    libglew-dev \
+    libosmesa6-dev \
+    libglfw3 \
+    libglfw3-dev \
+    patchelf \
     && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -27,6 +34,8 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 
 
 # Upgrade pip for Python 3.9
 RUN python3 -m pip install --upgrade pip
+
+RUN pip3 install --no-cache-dir mujoco==3.1.1
 
 # Set working directory
 WORKDIR /app
