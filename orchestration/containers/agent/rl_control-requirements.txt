@@ -1,0 +1,20 @@
+# RL Control Agent Requirements
+# These must match SOCT requirements
+
+# Core ML dependencies (matching SOCT requirements.txt)
+tensorflow==2.15.*
+tensorflow-probability==0.23.0
+numpy==1.26.4
+gymnasium==0.29.1
+scipy==1.12.0
+matplotlib==3.8.3
+pandas==2.2.1
+tqdm==4.66.2
+seaborn==0.13.2
+
+# TensorBoard for monitoring training
+tensorboard==2.15.1
+
+# Note: jlab_opt_control (SciOptControlToolkit) will be installed via Dockerfile
+# Repository: https://github.com/JeffersonLab/SciOptControlToolkit
+# Requires: Python 3.9+

@@ -40,6 +40,4 @@ if [ -f /docker-entrypoint-initdb.d/init.sql ]; then
 fi
 
 echo "[INFO] Running ${AGENT_TYPE} Agent..."
-python3 -m "smocs.agents.${AGENT_TYPE}_agent" --agent_config $AGENT_CONFIG
-
-tail -f /dev/null
+exec python3 -m "smocs.agents.${AGENT_TYPE}_agent" --agent_config "$AGENT_CONFIG"
