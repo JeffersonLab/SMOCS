@@ -1040,26 +1040,6 @@ class AutoencoderAgent(AgentBase):
         if 'inference' in self.enabled_threads:
             return AutoencoderMLInferenceThread(self.agent_id, self.agent_config, switch_fn=self.is_switch_on)
         return None
-    
-    def is_switch_on(self, message):
-        print(f"Agent config inputs: {self.agent_config['model_input']}")
-        if 'switch' in self.agent_config['model_input']:
-            switch_dict = self.agent_config['model_input']['switch']
-            switch_positions = []
-            print(f"Switch Dict: {switch_dict}")
-            print(f"Message: {message}")
-            for var_name in switch_dict:
-                position = True
-                if 'greater_than' in switch_dict[var_name]:
-                    if switch_dict[var_name]['greater_than'] > message[var_name]:
-                        position = False
-                if 'smaller_than' in switch_dict[var_name]:
-                    if switch_dict[var_name]['smaller_than'] < message[var_name]:
-                        position = False
-                switch_positions.append(position)
-            return all(switch_positions)
-        else:
-            return True
 
 
 def main():
