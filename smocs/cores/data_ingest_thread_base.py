@@ -14,7 +14,7 @@ class DataIngestThreadBase(KafkaConsumerBase, ABC):
     Inherits from KafkaConsumerBase to consume messages from Kafka.
     """
     
-    def __init__(self, agent_id: str, config: Dict[str, Any], switch_fn=None):
+    def __init__(self, agent_id: str, config: Dict[str, Any]):
         """
         Initialize the data ingest thread.
         
@@ -24,7 +24,7 @@ class DataIngestThreadBase(KafkaConsumerBase, ABC):
         """
         self.agent_id = agent_id
         self.config = config
-        self.switch_fn = switch_fn
+        self.switch_fn = config["switch_function"] if "switch_function" in config else None
         
         # Setup channel filter if configured
         input_channels = config.get('model_input', {}).get('channels')

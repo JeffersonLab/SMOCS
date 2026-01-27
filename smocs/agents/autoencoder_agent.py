@@ -621,7 +621,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
     Performs anomaly detection on streaming sensor data.
     """
     
-    def __init__(self, agent_id: str, config: Dict[str, Any], switch_fn=None):
+    def __init__(self, agent_id: str, config: Dict[str, Any]):
         self.window_size = config.get('window_size', 50)
         self.anomaly_threshold = None
         self.model = None
@@ -638,7 +638,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         pipeline_info = self.preprocessing_manager.get_pipeline_info()
         logging.info(f"AEMLInferenceThread: Initialized with preprocessing pipeline: {pipeline_info}")
         
-        super().__init__(agent_id, config, switch_fn=switch_fn)
+        super().__init__(agent_id, config)
    
     def load_model(self):
         """Load the latest autoencoder model from local directory."""
@@ -1019,6 +1019,7 @@ class AutoencoderAgent(AgentBase):
         # Add agent_id to config for threads to use
         self.agent_config = autoencoder_config.copy()
         self.agent_config['agent_id'] = self.agent_id
+        self.agent_config['switch_function'] = self.is_switch_on
 
         logging.info(f"AEAgent: AutoencoderAgent initialized with config: {self.agent_config}")
         logging.info(f"AEAgent: Enabled threads: {self.enabled_threads}")
@@ -1026,7 +1027,7 @@ class AutoencoderAgent(AgentBase):
     def create_data_ingest_component(self):
         """Create data ingestion thread component."""
         if 'ingest' in self.enabled_threads:
-            return AutoencoderDataIngestThread(self.agent_id, self.agent_config, switch_fn=self.is_switch_on)
+            return AutoencoderDataIngestThread(self.agent_id, self.agent_config)
         return None
     
     def create_ml_training_component(self):
@@ -1038,7 +1039,7 @@ class AutoencoderAgent(AgentBase):
     def create_ml_inference_component(self):
         """Create ML inference thread component."""
         if 'inference' in self.enabled_threads:
-            return AutoencoderMLInferenceThread(self.agent_id, self.agent_config, switch_fn=self.is_switch_on)
+            return AutoencoderMLInferenceThread(self.agent_id, self.agent_config)
         return None
 
 

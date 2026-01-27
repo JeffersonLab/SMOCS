@@ -15,7 +15,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
     Inherits from KafkaStreamingProcessBase to consume and produce Kafka messages.
     """
     
-    def __init__(self, agent_id: str, config: Dict[str, Any], switch_fn=None):
+    def __init__(self, agent_id: str, config: Dict[str, Any]):
         """
         Initialize the ML inference thread.
         
@@ -25,7 +25,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
         """
         self.agent_id = agent_id
         self.config = config
-        self.switch_fn = switch_fn
+        self.switch_fn = config['switch_function'] if 'switch_function' in config else None
         
         # Setup channel filter if configured
         input_channels = config.get('model_input', {}).get('channels')
