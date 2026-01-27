@@ -24,6 +24,7 @@ class DataIngestThreadBase(KafkaConsumerBase, ABC):
         """
         self.agent_id = agent_id
         self.config = config
+        self.switch_fn = config["switch_function"] if "switch_function" in config else None
         
         # Setup channel filter if configured
         input_channels = config.get('model_input', {}).get('channels')
