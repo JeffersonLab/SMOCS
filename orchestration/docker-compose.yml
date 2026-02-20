@@ -89,6 +89,14 @@ services:
       SMOCS_LOG_LEVEL: INFO
     command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
 
+  mya-kafka-producer:
+    extends: source-kafka-producer
+    profiles: ["mya"]
+    container_name: mya-kafka-producer
+    environment:
+      SMOCS_LOG_LEVEL: INFO
+    command: ["tail", "-f", "/dev/null"]
+
   gymnasium-kafka-controller:
     build:
       context: ../
