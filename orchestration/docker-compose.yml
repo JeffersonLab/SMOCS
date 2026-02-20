@@ -211,6 +211,22 @@ services:
     depends_on:
       kafka-broker:
         condition: service_healthy
+  
+  ollama-agent:
+    build:
+      context: ./containers/ollama-agent
+      dockerfile: Dockerfile
+    profiles: ["ollama-agent"]
+    container_name: ollama-agent
+    environment:
+      LLM_NAME: llama3.1:8b
+      MAX_MESSAGES: 40
+    volumes:                                      # NOTE: Mapped volumes are not affected by "context" under "build".
+      - ../smocs:/app/smocs:ro
+      - ../orchestration:/app/orchestration:rw    # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
+      - ollama_models:/root/.ollama               # To pull the LLM_NAME model only during the first run
+    ports:
+      - "8000:8000"                               # chainlit default port is 8000. Post is mapped to access chainlit from localhost
         
 volumes:
   influxdb-data:
@@ -220,6 +236,7 @@ volumes:
   mysql-data-rl1:  
   soct-configs: 
   rl-logs-1: 
+  ollama_models: 
 
 networks:
   kafka-net:
