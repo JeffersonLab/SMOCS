@@ -216,13 +216,21 @@ services:
     build:
       context: ./containers/ollama-agent
       dockerfile: Dockerfile
-    profiles: ["ollama-agent"]
     container_name: ollama-agent
+    profiles: ["ollama-agent"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
-      LLM_NAME: llama3.1:8b
+      LLM_NAME: qwen2.5:14b                       # phi4:14b has no tool calling
       MAX_MESSAGES: 40
+      OLLAMA_CONTEXT_LENGTH: 32768                # ollama config
     volumes:                                      # NOTE: Mapped volumes are not affected by "context" under "build".
-      - ../smocs:/app/smocs:ro
+      - ../smocs:/app/smocs:ro                    # To let agent see smocs code
       - ../orchestration:/app/orchestration:rw    # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
       - ollama_models:/root/.ollama               # To pull the LLM_NAME model only during the first run
     ports:

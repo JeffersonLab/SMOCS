@@ -5,6 +5,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages        # Instead of creating a wrapper tool node around the ToolNode to manually append the ToolMessage to state['messages']
 from langchain_ollama import ChatOllama
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import ToolNode
 import chainlit as cl
 
@@ -15,23 +16,24 @@ class AgentState(TypedDict):
 
 
 
-async def get_agent():
-    async def get_tools():
-        mcp_client = MultiServerMCPClient({
-            'server_1': {
-                'command': 'python',
-                'args': [os.path.join(os.path.dirname(__file__), 'mcp_server.py')],
-                'transport': 'stdio',
-            }
-        })
-        tools = await mcp_client.get_tools()
-        return tools
-    
+async def get_agent(tools: list):
+    """
+    Build and return the LangGraph agent.
+    Tools are passed in from the already-alive MCP client.
+    """
 
     async def llm_call(state: AgentState) -> dict:
         """Call LLM and return new message"""
-        response = await llm_with_tools.ainvoke(state['messages'])
+        response = await llm.ainvoke(state['messages'])
         return {'messages': [response]}
+    
+
+    def route_after_llm(state: AgentState) -> str:
+        """Route to human_approval or end based on whether tool calls exist"""
+        last_message = state['messages'][-1]
+        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+            return 'human_approval'
+        return 'end'
 
 
     async def human_approval(state: AgentState) -> dict:
@@ -57,7 +59,7 @@ async def get_agent():
         ).send()
         
         if res and res.get('payload', {}).get('decision') == 'yes':
-            # Approved - return empty dict to proceed
+            # Approved — return empty dict so the AIMessage with tool_calls remains last
             return {}
         else:
             # Rejected - ask for feedback
@@ -78,18 +80,14 @@ async def get_agent():
                     )
                 )
             return {'messages': blocked_messages}
-
-
-    def route_after_llm(state: AgentState) -> str:
-        """Route to approval/tools or end based on tool calls"""
-        last_message = state['messages'][-1]
-        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-            return 'human_approval'
-        return 'end'
     
 
     def route_after_approval(state: AgentState) -> str:
-        """Route to tools or llm based on approval"""
+        """
+        Route to tools or llm_call based on approval outcome.
+        - Approved ==> last message is still the AIMessage with tool_calls as the human_approval node does NOT add any message ==> 'tools'
+        - Rejected ==> last message is a ToolMessage (blocked result) ==> 'llm_call'
+        """
         last_message = state['messages'][-1]
         if isinstance(last_message, AIMessage) and last_message.tool_calls:
             # If last message is AIMessage with tool_calls, approval was given as the human_approval node does NOT add any message
@@ -98,9 +96,7 @@ async def get_agent():
 
 
     # Setup
-    tools = await get_tools()
-    llm = ChatOllama(model=os.environ['LLM_NAME'], temperature=0.0)
-    llm_with_tools = llm.bind_tools(tools)
+    llm = ChatOllama(model=os.environ['LLM_NAME'], temperature=0.0).bind_tools(tools)
 
     # Build graph
     graph = StateGraph(AgentState)
@@ -108,19 +104,16 @@ async def get_agent():
     graph.add_node('human_approval', human_approval)
     graph.add_node('tools', ToolNode(tools=tools))
     graph.add_edge(START, 'llm_call')
-    # After LLM, check if tools needed
     graph.add_conditional_edges(
         'llm_call',
         route_after_llm,
         {'human_approval': 'human_approval', 'end': END}
     )
-    # After human approval, execute tools or go back to LLM
     graph.add_conditional_edges(
         'human_approval',
         route_after_approval,
         {'tools': 'tools', 'llm_call': 'llm_call'}
     )
-    # After tools, go back to LLM
     graph.add_edge('tools', 'llm_call')
     agent = graph.compile()
     return agent
@@ -150,7 +143,28 @@ async def on_chat_start() -> None:
     Initialize the agent and store it in the user session.
     """
     await stream_content('Hi, please wait while agent is being initialized ...')
-    agent = await get_agent()
+
+    mcp_client_configs = {
+        'server_1': {
+            'command': 'python',
+            'args': [os.path.join(os.path.dirname(__file__), 'mcp_server.py')],
+            'transport': 'stdio',
+        }
+    }
+    mcp_client = MultiServerMCPClient(mcp_client_configs)
+    
+    tools = []
+    mcp_contexts = []
+    for mcp_server_name in mcp_client_configs.keys():
+        context = mcp_client.session(mcp_server_name)
+        # Enter the context (this starts the subprocess and stays open)
+        session = await context.__aenter__()
+        server_tools = await load_mcp_tools(session)
+        tools.extend(server_tools)
+        mcp_contexts.append(context)
+
+    agent = await get_agent(tools)
+
     try:
         png_data = agent.get_graph().draw_mermaid_png()
         with open(os.path.join(os.path.dirname(__file__), 'diagram.png'), 'wb') as file:
@@ -159,38 +173,43 @@ async def on_chat_start() -> None:
         print(f'An error occurred while attempting to save "diagram.png" representation of the workflow to disk: {e}') 
         print('Skipping saving "diagram.png" ...')
     cl.user_session.set('agent', agent)
+    cl.user_session.set('mcp_contexts', mcp_contexts)
     cl.user_session.set('state', {'messages': []})
+    cl.user_session.set('printed_ai_msgs_ids', set())
     await stream_content(f'''Agent "{os.environ['LLM_NAME']}" initialized successfully. How may I assist you today?''')
+
+
+@cl.on_chat_end
+async def on_chat_end() -> None:
+    mcp_contexts = cl.user_session.get('mcp_contexts')
+    for mcp_context in mcp_contexts:
+        await mcp_context.__aexit__(None, None, None)
 
 
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
     if message.content.strip().lower() == 'clear':
         cl.user_session.set('state', {'messages': []})
+        cl.user_session.set('printed_ai_msgs_ids', set())
         await stream_content('Chat history has been cleared. How may I assist you today?')
     else:
         agent = cl.user_session.get('agent')
         state = cl.user_session.get('state')
+        printed_ai_msgs_ids = cl.user_session.get('printed_ai_msgs_ids')
 
         messages = state['messages'] + [HumanMessage(content=message.content)]
         max_messages = int(os.environ.get('MAX_MESSAGES', len(messages)))
         messages = messages[-max_messages :]
 
-        msg = cl.Message(content='')
-        await msg.send()
-        num_printed_chars = 0
         latest_state = None
         async for latest_state in agent.astream({'messages': messages}, stream_mode='values'):
-            last_msg = latest_state['messages'][-1]
-            if isinstance(last_msg, AIMessage) and last_msg.content:
-                delta = last_msg.content[num_printed_chars :]
-                if delta:
-                    await stream_msg(msg, delta)
-                    num_printed_chars += len(delta)
-        await msg.update()
+            for state_msg in latest_state['messages']:
+                if isinstance(state_msg, AIMessage) and state_msg.content and (state_msg.id not in printed_ai_msgs_ids):
+                    printed_ai_msgs_ids.add(state_msg.id)
+                    await stream_content(state_msg.content)
         if latest_state is not None:
             cl.user_session.set('state', {'messages': latest_state['messages']})
-
+        cl.user_session.set('printed_ai_msgs_ids', printed_ai_msgs_ids)
     
 
 # Example Query: List down all the "PVs" in the "epics" service in the "./orchestration/config.yaml" file.
