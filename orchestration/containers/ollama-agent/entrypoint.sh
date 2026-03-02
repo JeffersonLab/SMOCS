@@ -16,6 +16,7 @@ done
 
 echo "Downloading model if not already exist: $LLM_NAME"
 ollama pull "$LLM_NAME"
+ollama run $LLM_NAME ""     # dummy run to load into VRAM
 
 echo "Starting Chainlit agent..."
 exec chainlit run /app/orchestration/containers/ollama-agent/chainlit_server.py --host 0.0.0.0 --port 8000
