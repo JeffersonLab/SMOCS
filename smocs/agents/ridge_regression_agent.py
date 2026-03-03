@@ -235,7 +235,7 @@ class RidgeRegressionMLInferenceThread(MLInferenceThreadBase):
             # attach any actual values for the target PVs (if present).
             result = {
                 "channels": channels,
-                "timestamp": message_data.get("timestamp", time.time()),
+                "timestamp": message_data.get("timestamp", time.time_ns()),
             }
 
             return result
