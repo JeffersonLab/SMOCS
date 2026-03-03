@@ -157,5 +157,35 @@ rl_control_agent1:
     log_lock_wait_threshold_ms: 100
   logdir: "./logs/rl_agent1"
 
+ridge_regression_agent1:
+  enabled_threads: ["inference"]          # only inference, no training/ingest
+  kafka_topics:
+    input:  "mya-archival-test"          # topic that carries your JSON blobs
+    output: "ridge-regression-predictions"
+
+  # optional channel filter – ensures messages contain everything the model
+  # expects.  omit this block to accept *all* numeric channels.
+  model_input:
+    channels:
+      - R2O1GMES
+      - R2O2GMES
+      - R2O3GMES
+      - R2O4GMES
+      - R2O5GMES
+      - R2O6GMES
+      - R2O7GMES
+      - R2O8GMES
+      - R2P1GMES
+      - R2P2GMES
+      - R2P3GMES
+      - R2P4GMES
+      - R2P5GMES
+      - R2P6GMES
+      - R2P7GMES
+      - R2P8GMES
+      - INX2L24_gDsRt 
+      - INX2L24_nDsRt
+
+
 project:
   name: "smocs-gymnasium-rl-control"

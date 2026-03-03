@@ -133,7 +133,7 @@ services:
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
       PYTHONPATH: /app
-      SMOCS_LOG_LEVEL: CRITICAL
+      SMOCS_LOG_LEVEL: DEBUG
     networks:
       - kafka-net
     command: ["sh", "-c", "sleep 15 && exec python -m smocs.consumers.influxdb_kafka_consumer"]
@@ -219,7 +219,22 @@ services:
     depends_on:
       kafka-broker:
         condition: service_healthy
-        
+
+
+  ridge-regression-agent1:
+    extends: agent
+    profiles: ["ridge"]
+    container_name: ridge-regression-agent1
+    environment:
+      AGENT_TYPE: ridge_regression
+      AGENT_CONFIG: ridge_regression_agent1
+      SMOCS_LOG_LEVEL: INFO
+    ports:
+      - "3310:3306"
+    volumes:
+      - mysql-data-rr1:/var/lib/mysql
+      - ./models:/app/models:ro  # read-only mount
+
 volumes:
   influxdb-data:
   grafana-storage:
@@ -228,6 +243,7 @@ volumes:
   mysql-data-rl1:  
   soct-configs: 
   rl-logs-1: 
+  mysql-data-rr1:
 
 networks:
   kafka-net:
