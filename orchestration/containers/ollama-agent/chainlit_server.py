@@ -131,7 +131,7 @@ async def stream_msg(msg: cl.Message, content: str) -> None:
     while start_idx < len(content):
         end_idx = start_idx + int(os.environ.get('STREAM_CHUNK_SIZE', 1))
         await msg.stream_token(content[start_idx : end_idx])
-        await cl.sleep(float(os.environ.get('STREAM_SLEEP_TIME', 0.02)))
+        await cl.sleep(float(os.environ.get('STREAM_SLEEP_TIME', 0.00)))
         start_idx = end_idx
 
 

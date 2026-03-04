@@ -1,7 +1,7 @@
 import os
 import yaml
 from fastmcp import FastMCP
-
+from typing import Any
 
 
 
@@ -10,7 +10,7 @@ mcp = FastMCP('my_mcp')
 
 
 @mcp.tool()
-def read_yaml(path: str) -> dict:
+def read_yaml(path: str) -> Any:
     """
     Read a YAML file and return its contents as a JSON-serializable object.
     """
@@ -29,6 +29,15 @@ def read_file(path: str) -> str:
     with open(path, 'r') as file:
         file_str = file.read()
     return file_str
+
+
+@mcp.tool()
+def write_yaml(val: Any, path: str) -> None:
+    """
+    Writes val to a YAML file specified in path. If exist_ok is False and path already exists, an error is returned.
+    """
+    with open(path, 'w') as file:
+        yaml.safe_dump(val, file, indent=4, sort_keys=True, default_flow_style=False)
 
 
 # TODO: mcp tool to get the tree directory structure of the smocs package

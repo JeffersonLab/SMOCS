@@ -1,161 +1,163 @@
-source: "CEBAF"
-
-mqtt:
-  topics:      
-    - topic: "bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading"
-      channel_paths:
-        rate1_value: "rate1.value"
-        rate1_low: "rate1.alarm.limits.low"
-        rate1_high: "rate1.alarm.limits.high"
-        rate2_value: "rate2.value"
-        rate2_low: "rate2.alarm.limits.low"
-        rate2_high: "rate2.alarm.limits.high"
-        rate3_value: "rate3.value"
-        rate3_low: "rate3.alarm.limits.low"
-        rate3_high: "rate3.alarm.limits.high"
-      timestamp_path: "timeStamp"
-
-epics:
-    source: CEBAF
-    PVs:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-      - IPMK203.PHAS
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-      - IPMK101.PHAS
-      - IPMK401.XPOS
-      - IPMK401.YPOS
-      - IPMK401.PHAS
-      - IGLK100HVPSkVolts
-      - ITFHALLAMODE
-      - ITFFCupK6485correctedCur.VAL
-      
-gymnasium:
-  # Environment settings
-  environment: "Pendulum-v1"
-  render_mode: null  # Options: null, 'human', 'rgb_array'
-  max_episode_steps: null  # null uses environment default
-  
-  # Kafka topics
-  input_topic: "gymnasium-action"
-  output_topics:
-    sarsa: "gymnasium-sarsa"
-    state: "gymnasium-state"
-    decomposed: "gymnasium-output"
-  
-  # Operation mode
-  blocking_mode: false  # true = wait for Kafka actions, false = use default actions
-  default_action_strategy: "random"  # Options: 'random', 'zero'
-  step_delay: 0.0  # Delay in seconds between steps
-  reset_on_start: true  # Reset environment on startup
-
-kafka:
-  auto_create: true
-  partitions: 1
-  replication_factor: 1
-
 autoencoder_agent1:
-  preprocessing_pipeline:
+    batch_size: 16
+    enabled_threads:
+    - ingest
+    - training
+    - inference
+    encoder_dims:
+    - 64
+    - 32
+    - 16
+    epochs: 10
+    kafka_topics:
+        input: CEBAF
+        output: autoencoder1-anomalies
+        training_output: autoencoder1-training-results
+    learning_rate: 0.0001
+    min_training_samples: 100
+    model_input:
+        bounds:
+        -   - -2.0
+            - 2.0
+        -   - -2.0
+            - 2.0
+        -   - 10.0
+            - 200.0
+        -   - 0.0
+            - 5.0
+        -   - 0.0
+            - 65.0
+        channels:
+        - IPMK101.XPOS
+        - IPMK101.YPOS
+        - IGLK100HVPSkVolts
+        - ITFHALLAMODE
+        - ITFFCupK6485correctedCur.VAL
+        switch:
+            IGLK100HVPSkVolts:
+                greater_than: 10.0
+            ITFFCupK6485correctedCur.VAL:
+                greater_than: 0.0
+            ITFHALLAMODE:
+                greater_than: 0.0
+    model_output:
+        channels:
+        - IPMK101.XPOS
+        - IPMK101.YPOS
+    preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  window_size: 5
-  min_training_samples: 100
-  encoder_dims: [64, 32, 16]
-  learning_rate: 0.0001
-  batch_size: 16
-  samples_multiplier: 3
-  epochs: 10
-  enabled_threads: ['ingest', 'training', 'inference']
-  model_input:
-      channels:
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-      - IGLK100HVPSkVolts
-      - ITFHALLAMODE
-      - ITFFCupK6485correctedCur.VAL
-      
-      bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
-      - [10.0, 200.0]
-      - [0.0, 5.0]
-      - [0.0, 65.0]
-
-      switch: # By default switch follows "AND" operation; #TODO: Define AND, OR combination logic
-        IGLK100HVPSkVolts: 
-          greater_than: 10.0
-        ITFHALLAMODE:
-          greater_than: 0.0 
-        ITFFCupK6485correctedCur.VAL:
-          greater_than: 0.0
-      
-  model_output:
-      channels:
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-
-  kafka_topics:
-    input: "CEBAF"
-    output: "autoencoder1-anomalies"
-    training_output: "autoencoder1-training-results"
-
+    samples_multiplier: 3
+    window_size: 5
 autoencoder_agent2:
-  preprocessing_pipeline:
+    batch_size: 16
+    enabled_threads:
+    - ingest
+    - training
+    - inference
+    encoder_dims:
+    - 64
+    - 32
+    - 16
+    epochs: 10
+    kafka_topics:
+        input: CEBAF
+        output: autoencoder2-anomalies
+        training_output: autoencoder2-training-results
+    learning_rate: 0.0001
+    min_training_samples: 100
+    model_input:
+        bounds:
+        -   - -2.0
+            - 2.0
+        -   - -2.0
+            - 2.0
+        channels:
+        - IPMK203.XPOS
+        - IPMK203.YPOS
+    model_output:
+        channels:
+        - IPMK203.XPOS
+        - IPMK203.YPOS
+    preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  window_size: 5
-  min_training_samples: 100
-  encoder_dims: [64, 32, 16]
-  learning_rate: 0.0001
-  batch_size: 16
-  samples_multiplier: 3
-  epochs: 10
-  enabled_threads: ['ingest', 'training', 'inference']
-  model_input:
-      channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-      
-      bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
-      
-  model_output:
-      channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-
-  kafka_topics:
-    input: "CEBAF"
-    output: "autoencoder2-anomalies"
-    training_output: "autoencoder2-training-results"
-
-rl_control_agent1:
-  environment: "Pendulum-v1"
-  soct_agent_type: "KerasTD3-v0"
-  soct_agent_config_path: "keras_td3.cfg"
-  buffer_type: "ER-v0"
-  buffer_size: 1000000
-  enabled_threads: ['ingest', 'training', 'inference']
-  kafka_topics:
-    input_sarsa: "gymnasium-sarsa"
-    input_state: "gymnasium-state"
-    output_action: "gymnasium-action"
-  data_ingest:
-    use_pipeline_sync: true
-    pipeline_timeout_sec: 100.0
-  training:
-    check_interval_ms: 10
-    use_pipeline_sync: true
-    pipeline_timeout_sec: 100.0
-    lock_timeout_sec: 2.0    
-  inference:
-    train_mode: true
-    use_pipeline_sync: true
-    pipeline_timeout_sec: 100.0
-    log_lock_wait_threshold_ms: 100
-  logdir: "./logs/rl_agent1"
-
+    samples_multiplier: 3
+    window_size: 5
+epics:
+    PVs:
+    - IPMK203.XPOS
+    - IPMK203.YPOS
+    - IPMK203.PHAS
+    - IPMK101.XPOS
+    - IPMK101.YPOS
+    - IPMK101.PHAS
+    - IPMK401.XPOS
+    - IPMK401.YPOS
+    - IPMK401.PHAS
+    - IGLK100HVPSkVolts
+    - ITFHALLAMODE
+    - ITFFCupK6485correctedCur.VAL
+    source: CEBAF
+gymnasium:
+    blocking_mode: false
+    default_action_strategy: random
+    environment: Pendulum-v1
+    input_topic: gymnasium-action
+    max_episode_steps: null
+    output_topics:
+        decomposed: gymnasium-output
+        sarsa: gymnasium-sarsa
+        state: gymnasium-state
+    render_mode: null
+    reset_on_start: true
+    step_delay: 0.0
+kafka:
+    auto_create: true
+    partitions: 1
+    replication_factor: 1
+mqtt:
+    topics:
+    -   channel_paths:
+            rate1_high: rate1.alarm.limits.high
+            rate1_low: rate1.alarm.limits.low
+            rate1_value: rate1.value
+            rate2_high: rate2.alarm.limits.high
+            rate2_low: rate2.alarm.limits.low
+            rate2_value: rate2.value
+            rate3_high: rate3.alarm.limits.high
+            rate3_low: rate3.alarm.limits.low
+            rate3_value: rate3.value
+        timestamp_path: timeStamp
+        topic: bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading
 project:
-  name: "smocs-gymnasium-rl-control"
+    name: smocs-gymnasium-rl-control
+rl_control_agent1:
+    buffer_size: 1000000
+    buffer_type: ER-v0
+    data_ingest:
+        pipeline_timeout_sec: 100.0
+        use_pipeline_sync: true
+    enabled_threads:
+    - ingest
+    - training
+    - inference
+    environment: Pendulum-v1
+    inference:
+        log_lock_wait_threshold_ms: 100
+        pipeline_timeout_sec: 100.0
+        train_mode: true
+        use_pipeline_sync: true
+    kafka_topics:
+        input_sarsa: gymnasium-sarsa
+        input_state: gymnasium-state
+        output_action: gymnasium-action
+    logdir: ./logs/rl_agent1
+    soct_agent_config_path: keras_td3.cfg
+    soct_agent_type: KerasTD3-v0
+    training:
+        check_interval_ms: 10
+        lock_timeout_sec: 2.0
+        pipeline_timeout_sec: 100.0
+        use_pipeline_sync: true
+source: CEBAF
