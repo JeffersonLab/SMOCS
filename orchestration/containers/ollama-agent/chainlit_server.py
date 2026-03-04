@@ -190,7 +190,12 @@ async def on_chat_start() -> None:
 async def on_chat_end() -> None:
     mcp_contexts = cl.user_session.get('mcp_contexts')
     for mcp_context in mcp_contexts:
-        await mcp_context.__aexit__(None, None, None)
+        try:
+            await mcp_context.__aexit__(None, None, None)
+        except RuntimeError as e:
+            print(f'Warning: MCP context cleanup error (safe to ignore): {e}')
+        except Exception as e:
+            print(f'Warning: Unexpected MCP context cleanup error: {e}')
 
 
 @cl.on_message
