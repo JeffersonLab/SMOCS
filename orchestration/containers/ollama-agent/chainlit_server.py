@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Annotated, List, TypedDict
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -50,6 +51,7 @@ async def get_agent(tools: list):
         tool_text = "\n\n".join(tool_descriptions)
         
         # Use Chainlit's AskActionMessage for approval
+        start_wait = time.perf_counter()
         res = await cl.AskActionMessage(
             content=f'AI wants to use the following tool(s):\n\n{tool_text}\n\nDo you approve?',
             actions=[
@@ -57,16 +59,21 @@ async def get_agent(tools: list):
                 cl.Action(name='reject', label='❌ Reject', payload={'decision': 'no'}),
             ],
         ).send()
+        human_delay = cl.user_session.get('human_delay') + time.perf_counter() - start_wait
+        cl.user_session.set('human_delay', human_delay)
         
         if res and res.get('payload', {}).get('decision') == 'yes':
             # Approved — return empty dict so the AIMessage with tool_calls remains last
             return {}
         else:
             # Rejected - ask for feedback
+            start_wait = time.perf_counter()
             feedback_res = await cl.AskUserMessage(
                 content='Tool execution blocked. Please provide feedback or a new instruction:',
                 timeout=300,  # 5 minutes timeout
             ).send()
+            human_delay = cl.user_session.get('human_delay') + time.perf_counter() - start_wait
+            cl.user_session.set('human_delay', human_delay)
             
             feedback = feedback_res['output'] if feedback_res else "No feedback provided"
             
@@ -193,6 +200,8 @@ async def on_message(message: cl.Message) -> None:
         cl.user_session.set('printed_ai_msgs_ids', set())
         await stream_content('Chat history has been cleared. How may I assist you today?')
     else:
+        start_time = time.perf_counter()
+        cl.user_session.set('human_delay', 0.0)
         agent = cl.user_session.get('agent')
         state = cl.user_session.get('state')
         printed_ai_msgs_ids = cl.user_session.get('printed_ai_msgs_ids')
@@ -210,6 +219,10 @@ async def on_message(message: cl.Message) -> None:
         if latest_state is not None:
             cl.user_session.set('state', {'messages': latest_state['messages']})
         cl.user_session.set('printed_ai_msgs_ids', printed_ai_msgs_ids)
+        total_delay = time.perf_counter() - start_time
+        human_delay = cl.user_session.get('human_delay')
+        agent_delay = total_delay - human_delay
+        await stream_content(f'Total Delay (s): {total_delay:.2f} ~ Agent Delay ({agent_delay:.2f}) + Human Delay ({human_delay:.2f})')
     
 
 # Example Query: List down all the "PVs" in the "epics" service in the "./orchestration/config.yaml" file.
