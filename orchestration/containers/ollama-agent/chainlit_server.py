@@ -1,7 +1,7 @@
 import os
 import time
 from typing import Annotated, List, TypedDict
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages        # Instead of creating a wrapper tool node around the ToolNode to manually append the ToolMessage to state['messages']
 from langchain_ollama import ChatOllama
@@ -51,49 +51,33 @@ async def get_agent(tools: list):
         tool_text = "\n\n".join(tool_descriptions)
         
         # Use Chainlit's AskActionMessage for approval
-        start_wait = time.perf_counter()
         res = await cl.AskActionMessage(
             content=f'AI wants to use the following tool(s):\n\n{tool_text}\n\nDo you approve?',
             actions=[
                 cl.Action(name='approve', label='✅ Approve', payload={'decision': 'yes'}),
                 cl.Action(name='reject', label='❌ Reject', payload={'decision': 'no'}),
             ],
+            timeout=300,  # 5 minutes timeout
         ).send()
-        human_delay = cl.user_session.get('human_delay') + time.perf_counter() - start_wait
-        cl.user_session.set('human_delay', human_delay)
         
         if res and res.get('payload', {}).get('decision') == 'yes':
             # Approved — return empty dict so the AIMessage with tool_calls remains last
             return {}
         else:
             # Rejected - ask for feedback
-            start_wait = time.perf_counter()
             feedback_res = await cl.AskUserMessage(
                 content='Tool execution blocked. Please provide feedback or a new instruction:',
                 timeout=300,  # 5 minutes timeout
             ).send()
-            human_delay = cl.user_session.get('human_delay') + time.perf_counter() - start_wait
-            cl.user_session.set('human_delay', human_delay)
-            
             feedback = feedback_res['output'] if feedback_res else "No feedback provided"
-            
-            # Create blocked tool messages
-            blocked_messages = []
-            for tool_call in last_message.tool_calls:
-                blocked_messages.append(
-                    ToolMessage(
-                        content=f'Tool execution blocked by user. User feedback: {feedback}',
-                        tool_call_id=tool_call['id']
-                    )
-                )
-            return {'messages': blocked_messages}
+            return {'messages': [HumanMessage(content=feedback)]}
     
 
     def route_after_approval(state: AgentState) -> str:
         """
         Route to tools or llm_call based on approval outcome.
         - Approved ==> last message is still the AIMessage with tool_calls as the human_approval node does NOT add any message ==> 'tools'
-        - Rejected ==> last message is a ToolMessage (blocked result) ==> 'llm_call'
+        - Rejected ==> last message is NOT an AIMessage (blocked result) ==> 'llm_call'
         """
         last_message = state['messages'][-1]
         if isinstance(last_message, AIMessage) and last_message.tool_calls:
@@ -109,7 +93,7 @@ async def get_agent(tools: list):
     graph = StateGraph(AgentState)
     graph.add_node('llm_call', llm_call)
     graph.add_node('human_approval', human_approval)
-    graph.add_node('tools', ToolNode(tools=tools))
+    graph.add_node('tools', ToolNode(tools=tools, messages_key='messages'))
     graph.add_edge(START, 'llm_call')
     graph.add_conditional_edges(
         'llm_call',
@@ -182,7 +166,6 @@ async def on_chat_start() -> None:
     cl.user_session.set('agent', agent)
     cl.user_session.set('mcp_contexts', mcp_contexts)
     cl.user_session.set('state', {'messages': []})
-    cl.user_session.set('printed_ai_msgs_ids', set())
     await stream_content(f'''Agent "{os.environ['LLM_NAME']}" initialized successfully. How may I assist you today?''')
 
 
@@ -202,32 +185,40 @@ async def on_chat_end() -> None:
 async def on_message(message: cl.Message) -> None:
     if message.content.strip().lower() == 'clear':
         cl.user_session.set('state', {'messages': []})
-        cl.user_session.set('printed_ai_msgs_ids', set())
         await stream_content('Chat history has been cleared. How may I assist you today?')
     else:
-        start_time = time.perf_counter()
-        cl.user_session.set('human_delay', 0.0)
         agent = cl.user_session.get('agent')
         state = cl.user_session.get('state')
-        printed_ai_msgs_ids = cl.user_session.get('printed_ai_msgs_ids')
+        state['messages'].append(HumanMessage(content=message.content))
+        t_0 = time.perf_counter()
+        async for update_dict in agent.astream(state, stream_mode='updates'):
+            update_time = time.perf_counter() - t_0
+            nodes_names = list(update_dict.keys())      # Only one item in update_dict since there are no parallel branches in agent.
+            await stream_content(f'Nodes "{nodes_names}" finished in {update_time:.2f} sec')
+            for state_delta in update_dict.values():
+                # state_delta has what is returned from the nodes, not the aggregated full state
+                if isinstance(state_delta, dict) and ('messages' in state_delta):
+                    new_msgs = state_delta['messages']
+                    state['messages'].extend(new_msgs)
+                    for msg in new_msgs:
+                        if isinstance(msg, AIMessage) and msg.content:
+                            await stream_content(msg.content)
+            t_0 = time.perf_counter()
+        cl.user_session.set('state', state)
 
-        messages = state['messages'] + [HumanMessage(content=message.content)]
-        max_messages = int(os.environ.get('MAX_MESSAGES', len(messages)))
-        messages = messages[-max_messages :]
 
-        latest_state = None
-        async for latest_state in agent.astream({'messages': messages}, stream_mode='values'):
-            for state_msg in latest_state['messages']:
-                if isinstance(state_msg, AIMessage) and state_msg.content and (state_msg.id not in printed_ai_msgs_ids):
-                    printed_ai_msgs_ids.add(state_msg.id)
-                    await stream_content(state_msg.content)
-        if latest_state is not None:
-            cl.user_session.set('state', {'messages': latest_state['messages']})
-        cl.user_session.set('printed_ai_msgs_ids', printed_ai_msgs_ids)
-        total_delay = time.perf_counter() - start_time
-        human_delay = cl.user_session.get('human_delay')
-        agent_delay = total_delay - human_delay
-        await stream_content(f'Total Delay (s): {total_delay:.2f} ~ Agent Delay ({agent_delay:.2f}) + Human Delay ({human_delay:.2f})')
+        
     
-
-# Example Query: List down all the "PVs" in the "epics" service in the "./orchestration/config.yaml" file.
+'''
+Queries
+-------
+a)
+List down all the "PVs" in the "epics" service in the "./orchestration/config.yaml" file.
+b)
+Which agent uses the first two only?
+c)
+Add the following to the configuration file:
+1. Append a new PV called "Ahmed_PV" to the list of spics PVs
+2. Add a new autoencoder called "autoencoder_agent3" that is identical to "autoencoder_agent2" BUT instead of using "IPMK203.XPOS" and "IPMK203.YPOS", it uses "Ahmed_PV" only.
+Keep the file structure the same without making removals. Just make the additions above.
+'''

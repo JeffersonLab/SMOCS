@@ -227,7 +227,6 @@ services:
               capabilities: [gpu]
     environment:
       LLM_NAME: qwen2.5:14b                       # phi4:14b has no tool calling
-      MAX_MESSAGES: 40
       OLLAMA_CONTEXT_LENGTH: 32768                # ollama config
       OLLAMA_KEEP_ALIVE: -1                       # Keep model in VRAM indefinitely between requests
     volumes:                                      # NOTE: Mapped volumes are not affected by "context" under "build".
