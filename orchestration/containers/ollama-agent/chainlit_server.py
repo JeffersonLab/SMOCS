@@ -1,5 +1,7 @@
 import os
 import time
+import yaml
+import myers
 from typing import Annotated, List, TypedDict
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, START, END
@@ -44,10 +46,41 @@ async def get_agent(tools: list):
         # Format tool calls for display
         tool_descriptions = []
         for i, tool_call in enumerate(last_message.tool_calls, 1):
-            tool_descriptions.append(
-                f"**{i}. Tool:** `{tool_call['name']}`\n**Args:** `{tool_call['args']}`"
-            )
-        
+            if tool_call['name'] == 'write_yaml':
+                filepath = tool_call['args']['path']
+                val = tool_call['args']['val']
+                val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
+                if os.path.isfile(filepath):
+                    # Apply myers algortithm to determine the shortest path of changes from old_val_str to val_str
+                    # NOTE: difflib.ndiff did NOT work well when there are common sections. It shows the changes in unexpected places.
+                    with open(filepath, 'r') as file:
+                        old_val = yaml.safe_load(file)
+                    old_val_str = yaml.safe_dump(old_val, sort_keys=True, indent=4, default_flow_style=False)
+                    # a) Single file with "+/-" to indicate insertions/removals
+                    diff_result = myers.diff(old_val_str.splitlines(), val_str.splitlines())
+                    final_output = []
+                    for action, line in diff_result:
+                        if action == 'k':
+                            # keep
+                            final_output.append(f"  {line}")  # Two spaces for alignment
+                        elif action == 'r':
+                            # remove
+                            final_output.append(f"- {line}")  # Minus for deletions
+                        elif action == 'i':
+                            # insert
+                            final_output.append(f"+ {line}")  # Plus for additions
+                        else:
+                            # omit
+                            assert action == 'o', f'actions can be one of KEEP/REMOVE/INSERT/OMIT (k/r/i/o) !!!'
+                            raise NameError('Undefined behavior with OMIT "o" action !!!')
+                    final_output: str = '\n'.join(final_output)
+                    # b) TODO: More fancy side-by-side view like vscode
+                    txt = f"### Tool {i}: `write_yaml`\n**📝 Overwriting File:** `{filepath}`\n```diff\n{final_output}\n```"
+                else:
+                    txt = f"### Tool {i}: `write_yaml`\n**📝 File:** `{filepath}`\n```diff\n{val_str}\n```"
+            else:
+                txt = f"### Tool {i}: `{tool_call['name']}`\n**Args:** `{tool_call['args']}`"
+            tool_descriptions.append(txt)
         tool_text = "\n\n".join(tool_descriptions)
         
         # Use Chainlit's AskActionMessage for approval
@@ -57,7 +90,7 @@ async def get_agent(tools: list):
                 cl.Action(name='approve', label='✅ Approve', payload={'decision': 'yes'}),
                 cl.Action(name='reject', label='❌ Reject', payload={'decision': 'no'}),
             ],
-            timeout=300,  # 5 minutes timeout
+            timeout=600,  # 10 minutes timeout
         ).send()
         
         if res and res.get('payload', {}).get('decision') == 'yes':
@@ -218,7 +251,7 @@ b)
 Which agent uses the first two only?
 c)
 Add the following to the configuration file:
-1. Append a new PV called "Ahmed_PV" to the list of spics PVs
-2. Add a new autoencoder called "autoencoder_agent3" that is identical to "autoencoder_agent2" BUT instead of using "IPMK203.XPOS" and "IPMK203.YPOS", it uses "Ahmed_PV" only.
-Keep the file structure the same without making removals. Just make the additions above.
+1. Append a new PV called "IPMK501.XPOS" to the list of epics PVs
+2. Add a new autoencoder called "autoencoder_agent3" that is identical to "autoencoder_agent2". The only difference is that it uses "IPMK501.XPOS" only instead of using "IPMK203.XPOS" and "IPMK203.YPOS".
+Keep the file structure the same without making any removals. Just make the additions listed above.
 '''

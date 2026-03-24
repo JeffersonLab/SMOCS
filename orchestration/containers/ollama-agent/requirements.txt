@@ -4,3 +4,4 @@ langchain_ollama==1.0.1
 langchain-mcp-adapters==0.2.1
 fastmcp==2.14.5
 chainlit==2.9.6
+myers==1.0.1
