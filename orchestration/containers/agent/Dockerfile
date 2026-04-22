@@ -1,10 +1,14 @@
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Copy corporate CA bundle
+COPY ./orchestration/containers/agent/ca-bundle.crt /usr/local/share/ca-certificates/ca-bundle.crt
+
 # Install system dependencies including Python 3.9
 RUN apt-get update && \
     apt-get install -y \
     software-properties-common \
+    ca-certificates \
     && add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y \
@@ -25,8 +29,12 @@ RUN apt-get update && \
     libglfw3 \
     libglfw3-dev \
     patchelf \
-    && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
+
+# Ensure Python and other tools use the updated CA bundle
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 # Set Python 3.9 as default python3
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 && \
