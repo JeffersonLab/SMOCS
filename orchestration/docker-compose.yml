@@ -226,13 +226,16 @@ services:
               count: 1
               capabilities: [gpu]
     environment:
-      LLM_NAME: qwen2.5:14b                       # phi4:14b has no tool calling
-      OLLAMA_CONTEXT_LENGTH: 32768                # ollama config
-      OLLAMA_KEEP_ALIVE: -1                       # Keep model in VRAM indefinitely between requests
-    volumes:                                      # NOTE: Mapped volumes are not affected by "context" under "build".
-      - ../smocs:/app/smocs:ro                    # To let agent see smocs code
-      - ../orchestration:/app/orchestration:rw    # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
-      - ollama_models:/root/.ollama               # To pull the LLM_NAME model only during the first run
+      LLM_NAME: qwen2.5-coder:7b                      # good & small BUT required special parsing for tool call | qwen2.5-coder:14b-instruct ==> so many edits | qwen2.5/3:14b good but not enough | phi4:14b has no tool calling | mistral-small:24b is bad at using tools | qwen3:30b didn't yield better results
+      OLLAMA_CONTEXT_LENGTH: 32768                    # ollama config
+      OLLAMA_KEEP_ALIVE: -1                           # Keep model in VRAM indefinitely between requests
+      #OLLAMA_KV_CACHE_TYPE: q8_0                     # biggest win: halves KV cache VRAM
+    volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
+      - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
+      - ../SMOCS_DOCS:/app/SMOCS_DOCS:ro              # Expose documentation
+      - ../smocs:/app/smocs:ro                        # Expose code
+      - ../orchestration:/app/orchestration:rw        # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
+      - ollama-models:/root/.ollama:rw                # To pull the LLM_NAME model only during the first run.
     ports:
       - "8000:8000"                               # chainlit default port is 8000. Post is mapped to access chainlit from localhost
         
@@ -244,7 +247,7 @@ volumes:
   mysql-data-rl1:  
   soct-configs: 
   rl-logs-1: 
-  ollama_models: 
+  ollama-models: 
 
 networks:
   kafka-net:

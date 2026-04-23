@@ -1,9 +1,11 @@
 import os
+import re
 import time
 import yaml
+import uuid
 import myers
 from typing import Annotated, List, TypedDict
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages        # Instead of creating a wrapper tool node around the ToolNode to manually append the ToolMessage to state['messages']
 from langchain_ollama import ChatOllama
@@ -24,10 +26,48 @@ async def get_agent(tools: list):
     Build and return the LangGraph agent.
     Tools are passed in from the already-alive MCP client.
     """
+    
+    def maybe_convert_to_tool_call(msg: AIMessage) -> AIMessage:
+        # Already has tool_calls → do nothing
+        if getattr(msg, "tool_calls", None):
+            return msg
+        text = msg.content
+
+        # --- 1️⃣ Extract code block if present (json/yaml/yml/anything) ---
+        match = re.search(
+            r"```(?:json|yaml|yml)?\s*(.*?)\s*```",
+            text,
+            re.DOTALL | re.IGNORECASE
+        )
+        inner = match.group(1) if match else text.strip()
+
+        # --- 2️⃣ Parse using YAML (handles both YAML & JSON) ---
+        try:
+            data = yaml.safe_load(inner)
+        except Exception:
+            return msg  # not parseable
+
+        # --- 3️⃣ Validate tool-call structure ---
+        if (not isinstance(data, dict)) or ("name" not in data) or ("arguments" not in data):
+            return msg
+
+        # --- 4️⃣ Convert to LangGraph tool_call ---
+        msg.tool_calls = [{
+            "name": data["name"],
+            "args": data["arguments"],
+            "id": str(uuid.uuid4()),
+            "type": "tool_call"
+        }]
+        # Clear content so routing goes to ToolNode
+        msg.content = ""
+        print('Converted msg to LangGraph tool_call !')
+        return msg
+
 
     async def llm_call(state: AgentState) -> dict:
         """Call LLM and return new message"""
         response = await llm.ainvoke(state['messages'])
+        response = maybe_convert_to_tool_call(response)
         return {'messages': [response]}
     
 
@@ -47,6 +87,11 @@ async def get_agent(tools: list):
         tool_descriptions = []
         for i, tool_call in enumerate(last_message.tool_calls, 1):
             if tool_call['name'] == 'write_yaml':
+                if 'path' not in tool_call['args']:
+                    return {'messages': [ToolMessage(content='Error: Did not find "path" in tool_call["args"] !', tool_call_id=tool_call['id'])]}
+                if 'val' not in tool_call['args']:
+                    return {'messages': [ToolMessage(content='Error: Did not find "val" in tool_call["args"] !', tool_call_id=tool_call['id'])]}
+
                 filepath = tool_call['args']['path']
                 val = tool_call['args']['val']
                 val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
@@ -160,6 +205,36 @@ async def stream_content(content: str) -> cl.Message:
     return msg
 
 
+def get_system_message() -> SystemMessage:
+    with open('/app/SMOCS_DOCS/docs/03 - Configuration File.md', 'r', encoding='utf-8') as file:
+        config_md_doc = file.read()
+    system_message = SystemMessage(
+        content = f'''
+        You are a specialized assistant for generating system configuration files.
+
+        ## Your Responsibilities
+        - Generate valid `config.yaml` and `docker-compose.yml` files based on the user's request.
+        - Do NOT make extra unrequested edits.
+        - Do NOT invent fields, keys, or structures not present in the documentation.
+
+        ## Output Rules (STRICT)
+        - Output ONLY the requested file(s)
+        - Do NOT include explanations unless explicitly asked
+
+        ## Handling Ambiguity
+        - If the request is missing required information, ask a concise clarification question
+        - Do NOT guess or assume missing values
+
+        ## Documentation (Source of Truth)
+        The following documentation defines the allowed structure for `config.yaml`.
+        You MUST follow it strictly:
+
+        {config_md_doc}
+        '''
+    )
+    return system_message
+
+
 @cl.on_chat_start
 async def on_chat_start() -> None:
     """
@@ -173,6 +248,7 @@ async def on_chat_start() -> None:
             'command': 'python',
             'args': [os.path.join(os.path.dirname(__file__), 'mcp_server.py')],
             'transport': 'stdio',
+            'env': os.environ.copy(),   # forward all parent env vars to the mcp subprocess
         }
     }
     mcp_client = MultiServerMCPClient(mcp_client_configs)
@@ -196,8 +272,10 @@ async def on_chat_start() -> None:
     except Exception as e:
         print(f'An error occurred while attempting to save "diagram.png" representation of the workflow to disk: {e}') 
         print('Skipping saving "diagram.png" ...')
+    #system_message = get_system_message()
     cl.user_session.set('agent', agent)
     cl.user_session.set('mcp_contexts', mcp_contexts)
+    #cl.user_session.set('state', {'messages': [system_message]})
     cl.user_session.set('state', {'messages': []})
     await stream_content(f'''Agent "{os.environ['LLM_NAME']}" initialized successfully. How may I assist you today?''')
 
@@ -217,6 +295,8 @@ async def on_chat_end() -> None:
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
     if message.content.strip().lower() == 'clear':
+        #system_message = get_system_message()
+        #cl.user_session.set('state', {'messages': [system_message]})
         cl.user_session.set('state', {'messages': []})
         await stream_content('Chat history has been cleared. How may I assist you today?')
     else:
@@ -250,8 +330,12 @@ List down all the "PVs" in the "epics" service in the "./orchestration/config.ya
 b)
 Which agent uses the first two only?
 c)
-Add the following to the configuration file:
+Show me all the configs of agent 2 then.
+d)
+Add the following to the configurations:
 1. Append a new PV called "IPMK501.XPOS" to the list of epics PVs
 2. Add a new autoencoder called "autoencoder_agent3" that is identical to "autoencoder_agent2". The only difference is that it uses "IPMK501.XPOS" only instead of using "IPMK203.XPOS" and "IPMK203.YPOS".
-Keep the file structure the same without making any removals. Just make the additions listed above.
+Keep the configuration structure the same without making any removals. Just make the additions listed above. Then save those configs to the same path (i.e., overwrite the file).
+e)
+Launch containers and release ollama gpu.
 '''
