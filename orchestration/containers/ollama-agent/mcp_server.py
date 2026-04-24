@@ -52,24 +52,80 @@ def write_yaml(path: str, val: dict | list | str | int | float | bool | None) ->
 #     subprocess.run(command, check=True, cwd=compose_dir)
 
 
+# @mcp.tool()
+# def launch_containers(release_ollama_gpu: bool = False) -> str:
+#     """
+#     Launches containers defined in the docker-compose.yml file based on the profiles defined in the .env file.
+#     Set release_ollama_gpu=True only if using an ollama model that is hosted on a local GPU that the containers also need.
+#     """
+#     compose_dir = os.path.join(os.path.dirname(__file__), '../..')
+#     llm_name = os.environ['LLM_NAME']
+#     ollama_url = 'http://localhost:11434/api/generate'
+
+#     # Step 1: Optionally release GPU
+#     if release_ollama_gpu:
+#         try:
+#             requests.post(ollama_url, json={'model': llm_name, 'keep_alive': -1, 'num_gpu': 0, 'prompt': ''})
+#         except Exception as e:
+#             return f"Failed to release GPU: {e}"
+
+#     # Step 2: Launch containers
+#     try:
+#         subprocess.run(
+#             ['docker', 'compose', 'build', '--no-cache'],
+#             check=True,
+#             cwd=compose_dir,
+#             stdout=subprocess.DEVNULL,
+#             stderr=None,
+#         )
+#         subprocess.run(
+#             ['docker', 'compose', 'up', '-d', '--force-recreate'],
+#             check=True,
+#             cwd=compose_dir,
+#             stdout=subprocess.DEVNULL,
+#             stderr=None,
+#         )
+#     except subprocess.CalledProcessError as e:
+#         if release_ollama_gpu:
+#             requests.post(ollama_url, json={'model': llm_name, 'keep_alive': -1, 'prompt': ''})
+#         return f"Failed to launch containers: {e}"
+
+#     # Step 3: Wait for all containers to be running/healthy
+#     timeout, interval, elapsed, statuses = 300, 5, 0, {}
+#     while elapsed < timeout:
+#         time.sleep(interval)
+#         elapsed += interval
+#         try:
+#             result = subprocess.run(
+#                 ['docker', 'compose', 'ps', '--format', 'json'],
+#                 check=True, cwd=compose_dir, capture_output=True, text=True,
+#             )
+#             containers = [json.loads(line) for line in result.stdout.strip().splitlines() if line]
+#             statuses = {container['Name']: container.get('Health', '') for container in containers}
+#             not_ready = [
+#                 container['Name'] for container in containers
+#                 if (container.get('State') != 'running') or (container.get('Health') in {'starting', 'unhealthy'})
+#             ]
+#             if len(not_ready) == 0:
+#                 break
+#         except Exception as e:
+#             if release_ollama_gpu:
+#                 requests.post(ollama_url, json={'model': llm_name, 'keep_alive': -1, 'prompt': ''})
+#             return f"Containers launched but failed to verify health: {e}"
+#     else:
+#         if release_ollama_gpu:
+#             requests.post(ollama_url, json={'model': llm_name, 'keep_alive': -1, 'prompt': ''})
+#         return f"Timed out waiting for containers after {timeout}s. Last statuses: {statuses}"
+
+#     return f"All containers launched successfully: {list(statuses.keys())}"
+
+
 @mcp.tool()
-def launch_containers(release_ollama_gpu: bool = False) -> str:
+def launch_containers() -> str:
     """
     Launches containers defined in the docker-compose.yml file based on the profiles defined in the .env file.
-    Set release_ollama_gpu=True only if using an ollama model that is hosted on a local GPU that the containers also need.
     """
     compose_dir = os.path.join(os.path.dirname(__file__), '../..')
-    llm_name = os.environ['LLM_NAME']
-    ollama_url = 'http://localhost:11434/api/generate'
-
-    # Step 1: Optionally release GPU
-    if release_ollama_gpu:
-        try:
-            requests.post(ollama_url, json={'model': llm_name, 'keep_alive': 0})
-        except Exception as e:
-            return f"Failed to release GPU: {e}"
-
-    # Step 2: Launch containers
     try:
         subprocess.run(
             ['docker', 'compose', 'build', '--no-cache'],
@@ -85,39 +141,9 @@ def launch_containers(release_ollama_gpu: bool = False) -> str:
             stdout=subprocess.DEVNULL,
             stderr=None,
         )
-    except subprocess.CalledProcessError as e:
-        if release_ollama_gpu:
-            requests.post(ollama_url, json={'model': llm_name, 'keep_alive': -1, 'prompt': ''})
-        return f"Failed to launch containers: {e}"
-
-    # Step 3: Wait for all containers to be running/healthy
-    timeout, interval, elapsed, statuses = 300, 5, 0, {}
-    while elapsed < timeout:
-        time.sleep(interval)
-        elapsed += interval
-        try:
-            result = subprocess.run(
-                ['docker', 'compose', 'ps', '--format', 'json'],
-                check=True, cwd=compose_dir, capture_output=True, text=True,
-            )
-            containers = [json.loads(line) for line in result.stdout.strip().splitlines() if line]
-            statuses = {container['Name']: container.get('Health', '') for container in containers}
-            not_ready = [
-                container['Name'] for container in containers
-                if (container.get('State') != 'running') or (container.get('Health') in {'starting', 'unhealthy'})
-            ]
-            if len(not_ready) == 0:
-                break
-        except Exception as e:
-            if release_ollama_gpu:
-                requests.post(ollama_url, json={'model': llm_name, 'keep_alive': -1, 'prompt': ''})
-            return f"Containers launched but failed to verify health: {e}"
-    else:
-        if release_ollama_gpu:
-            requests.post(ollama_url, json={'model': llm_name, 'keep_alive': -1, 'prompt': ''})
-        return f"Timed out waiting for containers after {timeout}s. Last statuses: {statuses}"
-
-    return f"All containers launched successfully: {list(statuses.keys())}"
+    except Exception as e:
+        return f'Failed to launch containers: {e}'
+    return f'Containers launched successfully'
 
 
 
