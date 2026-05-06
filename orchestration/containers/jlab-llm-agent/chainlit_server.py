@@ -339,5 +339,5 @@ Add the following to the configurations:
 2. Add a new autoencoder called "autoencoder_agent3" that is identical to "autoencoder_agent2". The only difference is that it uses "IPMK501.XPOS" only instead of using "IPMK203.XPOS" and "IPMK203.YPOS".
 Keep the configuration structure the same without making any removals. Just make the additions listed above. Then save those configs to the same path (i.e., overwrite the file).
 e)
-Launch containers and release ollama gpu.
+Launch containers
 '''

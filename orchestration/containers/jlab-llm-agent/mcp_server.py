@@ -36,13 +36,13 @@ def read_yaml(path: str) -> dict | list | str | int | float | bool | None:
 
 
 @mcp.tool()
-def write_yaml(path: str, content: dict | list | str | int | float | bool | None) -> str:
+def write_yaml(path: str, val: dict | list | str | int | float | bool | None) -> str:
     """
     Serialize and write structured data to a YAML file.
 
     Args:
         path: Destination file path.
-        content: JSON-serializable Python object to write as YAML.
+        val: JSON-serializable Python object to write as YAML.
 
     Returns:
         string indicating successful file writing or failure with the traceback error message.
@@ -58,7 +58,7 @@ def write_yaml(path: str, content: dict | list | str | int | float | bool | None
     """
     try:
         with open(path, 'w') as file:
-            yaml.safe_dump(content, file, indent=4, sort_keys=True, default_flow_style=False)
+            yaml.safe_dump(val, file, indent=4, sort_keys=True, default_flow_style=False)
         return f'File "{path}" written successfully'
     except Exception as e:
         return f'An error occurred during the execution of write_yaml:\n{repr(e)}'
@@ -89,13 +89,13 @@ def read_file(path: str) -> str:
 
 
 @mcp.tool()
-def write_file(path: str, content: str) -> str:
+def write_file(path: str, val: str) -> str:
     """
-    Write text content to a file on disk.
+    Write text val to a file on disk.
 
     Args:
         path: Destination file path.
-        content: Text content to write.
+        val: Text content to write.
 
     Returns:
         string indicating successful file writing or failure with the traceback error message.
@@ -104,12 +104,11 @@ def write_file(path: str, content: str) -> str:
         - Existing files are overwritten.
         - Parent directories must already exist.
         - File is written using UTF-8 encoding.
-        - Intended for writing source code, configuration files,
-          logs, or general text files.
+        - Intended for writing source code, configuration files, logs, or general text files.
     """
     try:
         with open(path, 'w', encoding='utf-8') as file:
-            file.write(content)
+            file.write(val)
         return f'File "{path}" written successfully'
     except Exception as e:
         return f'An error occurred during the execution of write_file:\n{repr(e)}'
@@ -127,19 +126,14 @@ def launch_containers() -> str:
         docker compose up -d --force-recreate
 
     Returns:
-        A status message indicating whether the containers were
-        launched successfully or an error occurred.
+        A status message indicating whether the containers were launched successfully or an error occurred.
 
     Notes:
         - Forces a full image rebuild without using Docker cache.
-        - Recreates running containers even if configuration has
-          not changed.
+        - Recreates running containers even if configuration has not changed.
         - Runs services in detached mode.
-        - Docker and Docker Compose must be installed and available
-          in the execution environment.
-        - The active Compose profiles and environment variables are
-          determined by the project's docker-compose.yml and .env
-          configuration.
+        - Docker and Docker Compose must be installed and available in the execution environment.
+        - The active Compose profiles and environment variables are determined by the project's docker-compose.yml and .env configuration.
     """
     try:
         compose_dir = os.path.join(os.path.dirname(__file__), '../..')
@@ -157,7 +151,7 @@ def launch_containers() -> str:
             stdout=subprocess.DEVNULL,
             stderr=None,
         )
-        return f'Containers launched successfully'
+        return f'Successful submission of containers launching. It might take a few moments for all services to be up and running.'
     except Exception as e:
         return f'An error occurred during the execution of launch_containers:\n{repr(e)}'
 
