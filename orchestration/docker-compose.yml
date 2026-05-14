@@ -249,6 +249,7 @@ services:
       LLM_URL: "https://API.delphi.jlab.org"
       LLM_KEY: ${LLM_KEY}
       LLM_NAME: "openai/gpt-oss-120b"
+      #LLM_NAME: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
       - ../SMOCS_DOCS:/app/SMOCS_DOCS:ro              # Expose documentation

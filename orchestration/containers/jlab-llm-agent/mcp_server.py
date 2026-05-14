@@ -122,7 +122,7 @@ def launch_containers() -> str:
     This tool executes the following commands from the project
     compose directory:
 
-        docker compose build --no-cache
+        docker compose build --no-cache --pull
         docker compose up -d --force-recreate
 
     Returns:
@@ -138,7 +138,7 @@ def launch_containers() -> str:
     try:
         compose_dir = os.path.join(os.path.dirname(__file__), '../..')
         subprocess.run(
-            ['docker', 'compose', 'build', '--no-cache'],
+            ['docker', 'compose', 'build', '--no-cache', '--pull'],
             check=True,
             cwd=compose_dir,
             stdout=subprocess.DEVNULL,
