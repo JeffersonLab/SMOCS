@@ -175,21 +175,14 @@ def launch_containers() -> str:
     """
     try:
         compose_dir = os.path.join(os.path.dirname(__file__), '../..')
-        subprocess.run(
-            ['docker', 'compose', 'build', '--no-cache', '--pull'],
-            check=True,
+        subprocess.Popen(
+            'docker compose build --no-cache --pull && docker compose up -d --force-recreate',
+            shell=True,
             cwd=compose_dir,
             stdout=subprocess.DEVNULL,
             stderr=None,
         )
-        subprocess.run(
-            ['docker', 'compose', 'up', '-d', '--force-recreate'],
-            check=True,
-            cwd=compose_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=None,
-        )
-        return f'Successful submission of containers launching. It might take a few moments for all services to be up and running.'
+        return 'Building images and launching containers in the background ... It might take a few moments for all services to be up and running.'
     except Exception as e:
         return f'An error occurred during the execution of launch_containers:\n{repr(e)}'
 
