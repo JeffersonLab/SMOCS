@@ -115,6 +115,44 @@ def write_file(path: str, val: str) -> str:
 
 
 @mcp.tool()
+def list_directory(path: str) -> str:
+    """
+    Recursively list the contents of a directory, including hidden files and directories.
+
+    Args:
+        path: Path to an existing directory.
+
+    Returns:
+        A string representing the directory tree, with each entry on its own line.
+        Directories are marked with a trailing "/".
+        If an error occurs, a string containing the error message is returned instead.
+
+    Notes:
+        - Hidden files and directories (names starting with ".") are included.
+        - Symbolic links are listed but not followed.
+        - Output is sorted alphabetically at each level.
+    """
+    try:
+        lines = []
+        path = os.path.abspath(path)
+        lines.append(f'{path}/')
+        for dirpath, dirnames, filenames in os.walk(path):
+            dirnames.sort()
+            filenames.sort()
+            level = dirpath.replace(path, '').count(os.sep)
+            indent = '    ' * level
+            rel = os.path.relpath(dirpath, path)
+            if rel != '.':
+                lines.append(f'{indent}{os.path.basename(dirpath)}/')
+            subindent = '    ' * (level + 1)
+            for fname in filenames:
+                lines.append(f'{subindent}{fname}')
+        return '\n'.join(lines)
+    except Exception as e:
+        return f'An error occurred during the execution of list_directory:\n{repr(e)}'
+
+
+@mcp.tool()
 def launch_containers() -> str:
     """
     Rebuild and launch Docker Compose services for the project.
@@ -154,10 +192,6 @@ def launch_containers() -> str:
         return f'Successful submission of containers launching. It might take a few moments for all services to be up and running.'
     except Exception as e:
         return f'An error occurred during the execution of launch_containers:\n{repr(e)}'
-
-
-
-# TODO: mcp tool to get the tree directory structure of the smocs package
 
 
 

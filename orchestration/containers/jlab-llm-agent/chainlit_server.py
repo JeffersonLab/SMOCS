@@ -76,7 +76,7 @@ async def get_agent(tools: list):
         # Format tool calls for display
         tool_descriptions = []
         for i, tool_call in enumerate(last_message.tool_calls, 1):
-            if tool_call['name'] == 'write_yaml':
+            if tool_call['name'] in {'write_yaml', 'write_file'}:
                 if 'path' not in tool_call['args']:
                     return {
                         'messages': [ToolMessage(content='Error: Did not find "path" in tool_call["args"] !', tool_call_id=tool_call['id'])]
@@ -88,13 +88,22 @@ async def get_agent(tools: list):
 
                 filepath = tool_call['args']['path']
                 val = tool_call['args']['val']
-                val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
+                # write_yaml: val is a dict, so serialize to YAML string for diffing.
+                # write_file: val is already a plain-text string.
+                if tool_call['name'] == 'write_yaml':
+                    val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
+                else:
+                    val_str = val
                 if os.path.isfile(filepath):
-                    # Apply myers algortithm to determine the shortest path of changes from old_val_str to val_str
+                    # Apply myers algorithm to determine the shortest path of changes from old_val_str to val_str
                     # NOTE: difflib.ndiff did NOT work well when there are common sections. It shows the changes in unexpected places.
-                    with open(filepath, 'r') as file:
-                        old_val = yaml.safe_load(file)
-                    old_val_str = yaml.safe_dump(old_val, sort_keys=True, indent=4, default_flow_style=False)
+                    with open(filepath, 'r', encoding='utf-8') as file:
+                        # write_yaml: round-trip through yaml to normalize formatting before diffing.
+                        # write_file: read as plain text.
+                        if tool_call['name'] == 'write_yaml':
+                            old_val_str = yaml.safe_dump(yaml.safe_load(file), sort_keys=True, indent=4, default_flow_style=False)
+                        else:
+                            old_val_str = file.read()
                     # a) Single file with "+/-" to indicate insertions/removals
                     diff_result = myers.diff(old_val_str.splitlines(), val_str.splitlines())
                     final_output = []
@@ -114,9 +123,9 @@ async def get_agent(tools: list):
                             raise NameError('Undefined behavior with OMIT "o" action !!!')
                     final_output: str = '\n'.join(final_output)
                     # b) TODO: More fancy side-by-side view like vscode
-                    txt = f"### Tool {i}: `write_yaml`\n**📝 Overwriting File:** `{filepath}`\n```diff\n{final_output}\n```"
+                    txt = f"### Tool {i}: `{tool_call['name']}`\n**📝 Overwriting File:** `{filepath}`\n```diff\n{final_output}\n```"
                 else:
-                    txt = f"### Tool {i}: `write_yaml`\n**📝 File:** `{filepath}`\n```diff\n{val_str}\n```"
+                    txt = f"### Tool {i}: `{tool_call['name']}`\n**📝 File:** `{filepath}`\n```diff\n{val_str}\n```"
             else:
                 txt = f"### Tool {i}: `{tool_call['name']}`\n**Args:** `{tool_call['args']}`"
             tool_descriptions.append(txt)
@@ -201,40 +210,24 @@ async def stream_content(content: str) -> cl.Message:
 
 
 def get_system_message() -> SystemMessage:
-    with open('/app/SMOCS_DOCS/docs/01 - Quick Start.md', 'r', encoding='utf-8') as file:
-        quick_start_md_doc = file.read()
-    with open('/app/SMOCS_DOCS/docs/02 - Environment File.md', 'r', encoding='utf-8') as file:
-        env_file_md_doc = file.read()
-    with open('/app/SMOCS_DOCS/docs/03 - Configuration File.md', 'r', encoding='utf-8') as file:
-        config_md_doc = file.read()
     system_message = SystemMessage(
-        content = f'''
-        You are a specialized assistant for generating system configuration files.
+        content = '''
+        You are a specialized assistant for the SMOCS system.
+        You help users read and answer questions about the current configuration, generate or edit configuration files, and launch the system.
 
-        ## Your Responsibilities
-        - Generate valid `config.yaml`, `docker-compose.yml`, and `.env` files based on the user's request.
-        - Do NOT read files that are not related to the user's request.
-        - Do NOT make extra unrequested edits.
+        ## Rules
         - Do NOT invent fields, keys, or structures not present in the documentation.
+        - Do NOT make unrequested edits.
+        - If the request is missing required information, ask a concise clarification question. Do NOT guess or assume missing values.
 
-        ## Output Rules (STRICT)
-        - Output ONLY the requested file(s)
-        - Do NOT include explanations unless explicitly asked
+        ## Available Resources
+        - `/app/SMOCS_DOCS/` — Project documentation (Markdown). This is the primary source of truth for allowed configuration structures and valid field values.
+        - `/app/smocs/` — Python source code. Read this when documentation alone is insufficient.
+        - `/app/orchestration/` — Live configuration files (`config.yaml`, `docker-compose.yml`, `.env`).
 
-        ## Handling Ambiguity
-        - If the request is missing required information, ask a concise clarification question
-        - Do NOT guess or assume missing values
-
-        ## Documentation (Source of Truth)
-        The following documentation defines the allowed structure for the different files.
-        You MUST follow it strictly:
-
-        {quick_start_md_doc}
-
-        {env_file_md_doc}
-
-        {config_md_doc}
-        '''
+        At the beginning of the chat, start by reading the documentation to understand the mechanics of the SMOCS system.
+        Refer to the code if the user's request is not fully addressable by the documentation alone.
+        '''.strip()
     )
     return system_message
 
