@@ -245,6 +245,7 @@ services:
       dockerfile: Dockerfile
     container_name: jlab-llm-agent
     profiles: ["jlab-llm-agent"]
+    restart: unless-stopped
     environment:
       LLM_URL: "https://API.delphi.jlab.org"
       LLM_KEY: ${LLM_KEY}
@@ -258,7 +259,6 @@ services:
       - ../orchestration:/app/orchestration:rw        # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
     ports:
       - "8000:8000"                               # chainlit default port is 8000. Post is mapped to access chainlit from localhost
-    entrypoint: ["chainlit", "run", "/app/orchestration/containers/jlab-llm-agent/chainlit_server.py",  "--host", "0.0.0.0", "--port", "8000"]
         
 volumes:
   influxdb-data:

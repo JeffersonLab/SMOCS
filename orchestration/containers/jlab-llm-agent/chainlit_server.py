@@ -235,7 +235,7 @@ def get_system_message() -> SystemMessage:
         - Keep the data types the same when generating new configurations. For example, if a field is a list of strings in the documentation, it should NOT be changed to a single string or a dict.
         - When editing an existing configuration file, keep the structure and formatting as similar as possible to the original file. For example, if one of the fields in the original file is a list of ints and the user did not ask you to change it, do not unnecessarily change it to a list of floats.
         - Anytime you change one of the config files (i.e., 'config.yaml', 'docker-compose.yml', '.env'), you should check the others as well to keep them consistent. For example, if you add a new agent in `config.yaml`, you would also need to add that agent in `docker-compose.yml` to make sure it gets launched, and probably also add some relevant environment variables in `.env`. So please make sure to check all config files for consistency after any edit or generation.
-        - Never edit the "jlab-llm-agent" or "ollama-agent" services in the docker-compose.yml file as those have nothin to do with the SMOCS system itself. They are just there to provide the user interface and LLM capabilities for you to assist the user with the SMOCS system.
+        - Never edit the "jlab-llm-agent" or "ollama-agent" services in the docker-compose.yml file as those have nothing to do with the SMOCS system itself. They are just there to provide the user interface and LLM capabilities for you to assist the user with the SMOCS system.
 
         ## Available Resources
         - `/app/smocs/` — Python source code. Read this when the documentation below is insufficient.

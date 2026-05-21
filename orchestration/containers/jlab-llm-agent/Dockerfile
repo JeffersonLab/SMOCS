@@ -3,13 +3,12 @@ FROM python:3.12-slim
 # Fix corporate SSL ==> IMPORTANT NOTE: copied from /etc/ssl/certs/ca-bundle.crt
 COPY ./ca-bundle.crt /usr/local/share/ca-certificates/ca-bundle.crt
 RUN apt-get update && \
-    apt-get install -y ca-certificates && \
-    update-ca-certificates
-
-RUN apt-get update && apt-get install -y \
-    curl \
-    bash \
-    zstd \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        bash \
+        zstd \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI + Compose plugin from Docker's official apt repo ==> To enable launching sibling containers
