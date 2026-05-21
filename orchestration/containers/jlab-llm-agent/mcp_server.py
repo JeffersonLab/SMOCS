@@ -10,32 +10,6 @@ mcp = FastMCP('my_mcp')
 
 
 @mcp.tool()
-def read_yaml(path: str) -> dict | list | str | int | float | bool | None:
-    """
-    Read and parse a YAML file from disk.
-
-    Args:
-        path: Path to an existing YAML file.
-
-    Returns:
-        The parsed YAML content as a JSON-serializable Python object.
-        Depending on the YAML structure, the returned value may be:
-        dict, list, str, int, float, bool, or None.
-        If an error occurs, a string containing the error message is returned instead.
-
-    Notes:
-        Uses yaml.safe_load().
-        This tool is intended for structured configuration files.
-    """
-    try:
-        with open(path, 'r') as file:
-            data = yaml.safe_load(file)
-        return data
-    except Exception as e:
-        return f'An error occurred during the execution of read_yaml:\n{repr(e)}'
-
-
-@mcp.tool()
 def write_yaml(path: str, val: dict | list | str | int | float | bool | None) -> str:
     """
     Serialize and write structured data to a YAML file.
@@ -65,25 +39,30 @@ def write_yaml(path: str, val: dict | list | str | int | float | bool | None) ->
 
 
 @mcp.tool()
-def read_file(path: str) -> str:
+def read_file(path: str) -> dict | list | str | int | float | bool | None:
     """
-    Read a text file from disk and return its contents.
+    Read a file from disk and return its contents.
+
+    If the file extension is .yaml or .yml, the file is parsed as YAML and the
+    deserialized Python object is returned. Otherwise, the raw file contents are
+    returned as a string.
 
     Args:
-        path: Path to an existing text file.
+        path: Path to an existing file.
 
     Returns:
-        The full file contents as a string.
+        For .yaml/.yml files: the parsed content as dict, list, str, int, float,
+        bool, or None depending on the YAML structure.
+        For all other files: the full file contents as a string.
         If an error occurs, a string containing the error message is returned instead.
-
-    Notes:
-        Intended for reading regular text-based files such as:
-        source code, logs, configuration files, or documentation.
     """
     try:
-        with open(path, 'r', encoding='utf-8') as file:
-            file_str = file.read()
-        return file_str
+        if path.endswith(('.yaml', '.yml')):
+            with open(path, 'r') as file:
+                return yaml.safe_load(file)
+        else:
+            with open(path, 'r', encoding='utf-8') as file:
+                return file.read()
     except Exception as e:
         return f'An error occurred during the execution of read_file:\n{repr(e)}'
 
