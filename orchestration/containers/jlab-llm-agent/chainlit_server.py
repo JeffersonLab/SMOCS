@@ -142,16 +142,21 @@ async def get_agent(tools: list):
         ).send()
         
         if res and res.get('payload', {}).get('decision') == 'yes':
-            # Approved — return empty dict so the AIMessage with tool_calls remains last
+            await stream_content(f'✅ **Approved tool call(s):**\n\n{tool_text}')
             return {}
         else:
+            await stream_content(f'❌ **Rejected tool call(s):**\n\n{tool_text}')
             # Rejected - ask for feedback
             feedback_res = await cl.AskUserMessage(
                 content='Tool execution blocked. Please provide feedback or a new instruction:',
                 timeout=300,  # 5 minutes timeout
             ).send()
             feedback = feedback_res['output'] if feedback_res else "No feedback provided"
-            return {'messages': [HumanMessage(content=feedback)]}
+            stub_tool_msgs = [
+                ToolMessage(content='Tool call rejected by user.', tool_call_id=tc['id'])
+                for tc in last_message.tool_calls
+            ]
+            return {'messages': stub_tool_msgs + [HumanMessage(content=feedback)]}
     
 
     def route_after_approval(state: AgentState) -> str:
@@ -319,7 +324,16 @@ async def on_message(message: cl.Message) -> None:
         async for update_dict in agent.astream(state, stream_mode='updates'):
             update_time = time.perf_counter() - t_0
             nodes_names = list(update_dict.keys())      # Only one item in update_dict since there are no parallel branches in agent.
-            await stream_content(f'Nodes "{nodes_names}" finished in {update_time:.2f} sec')
+            #await stream_content(f'Nodes "{nodes_names}" finished in {update_time:.2f} sec')
+            node_name = nodes_names[0]
+            if node_name == 'llm_call':
+                async with cl.Step(name=f'Thinking  ({update_time:.2f}s)', type='llm'):
+                    pass
+            elif node_name == 'tools':
+                last_ai_msg = next(m for m in reversed(state['messages']) if isinstance(m, AIMessage))
+                tool_names = ', '.join(tc['name'] for tc in last_ai_msg.tool_calls)
+                async with cl.Step(name=f'Calling: {tool_names}  ({update_time:.2f}s)', type='tool'):
+                    pass
             for state_delta in update_dict.values():
                 # state_delta has what is returned from the nodes, not the aggregated full state
                 if isinstance(state_delta, dict) and ('messages' in state_delta):
