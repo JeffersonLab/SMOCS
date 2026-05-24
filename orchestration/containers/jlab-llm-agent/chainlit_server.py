@@ -132,7 +132,6 @@ async def get_agent(tools: list):
             tool_descriptions.append(txt)
         tool_text = "\n\n".join(tool_descriptions)
         
-        # Use Chainlit's AskActionMessage for approval
         res = await cl.AskActionMessage(
             content=f'AI wants to use the following tool(s):\n\n{tool_text}\n\nDo you approve?',
             actions=[
@@ -141,23 +140,55 @@ async def get_agent(tools: list):
             ],
             timeout=600,  # 10 minutes timeout
         ).send()
-        
+
+        # Case 1: Approved — execute tools right away
         if res and res.get('payload', {}).get('decision') == 'yes':
             await cl.Message(content=f'✅ **Approved tool call(s):**\n\n{tool_text}').send()
             return {}
-        else:
-            await cl.Message(content=f'❌ **Rejected tool call(s):**\n\n{tool_text}').send()
-            # Rejected - ask for feedback
-            feedback_res = await cl.AskUserMessage(
-                content='Tool execution blocked. Please provide feedback or a new instruction:',
-                timeout=300,  # 5 minutes timeout
-            ).send()
-            feedback = feedback_res['output'] if feedback_res else "No feedback provided"
-            stub_tool_msgs = [
-                ToolMessage(content='Tool call rejected by user.', tool_call_id=tc['id'])
+
+        # Case 4: Approve/Reject timeout — user did not respond
+        if res is None:
+            await cl.Message(content=f'⏰ **Tool call(s) timed out (not executed):**\n\n{tool_text}').send()
+            stub_tool_msgs_timeout = [
+                ToolMessage(content='Tool call approval timed out — tool was not executed.', tool_call_id=tc['id'])
                 for tc in last_message.tool_calls
             ]
-            return {'messages': stub_tool_msgs + [HumanMessage(content=feedback)]}
+            return {
+                'messages': stub_tool_msgs_timeout + [
+                    SystemMessage(content=inspect.cleandoc('''
+                        The tool approval prompt timed out — the user did not respond.
+                        Let the user know the tools were not executed due to the timeout,
+                        and ask if there is something they would still like to do.
+                    '''))
+                ]
+            }
+
+        # Case 2 & 3: Explicit reject — ask for feedback (timeout = user rejected but said nothing)
+        await cl.Message(content=f'❌ **Explicitly rejected tool call(s):**\n\n{tool_text}').send()
+        feedback_res = await cl.AskUserMessage(
+            content='Tool execution blocked. Please provide feedback or a new instruction:',
+            timeout=300,  # 5 minutes timeout
+        ).send()
+
+        stub_tool_msgs_rejected = [
+            ToolMessage(content='Tool call rejected by user.', tool_call_id=tc['id'])
+            for tc in last_message.tool_calls
+        ]
+
+        # Case 2: Explicit reject + feedback provided
+        if feedback_res:
+            return {'messages': stub_tool_msgs_rejected + [HumanMessage(content=feedback_res['output'])]}
+
+        # Case 3: Explicit reject + feedback timeout — user rejected but gave no reason
+        return {
+            'messages': stub_tool_msgs_rejected + [
+                SystemMessage(content=inspect.cleandoc('''
+                    The user rejected the tool call(s) but did not provide a reason
+                    (feedback timed out). Gently ask if they can explain why they
+                    rejected, or if there is something else they need.
+                '''))
+            ]
+        }
     
 
     def route_after_approval(state: AgentState) -> str:
@@ -215,7 +246,7 @@ async def stream_content(content: str) -> cl.Message:
     return msg
 
 
-def get_system_message() -> SystemMessage:
+def get_opening_system_message() -> SystemMessage:
     docs_dir = os.path.join(os.path.dirname(__file__), '../../../SMOCS_DOCS')
     docs_sections = []
     for dirpath, dirnames, filenames in os.walk(docs_dir):
@@ -294,7 +325,7 @@ async def on_chat_start() -> None:
         print('Skipping saving "diagram.png" ...')
     cl.user_session.set('agent', agent)
     cl.user_session.set('mcp_contexts', mcp_contexts)
-    cl.user_session.set('state', {'messages': [get_system_message()], 'first_msg_idx_to_normalize': 1})      # first msg is already normalized. Its content is already a string.
+    cl.user_session.set('state', {'messages': [get_opening_system_message()], 'first_msg_idx_to_normalize': 1})      # first msg is already normalized. Its content is already a string.
     #cl.user_session.set('state', {'messages': [], 'first_msg_idx_to_normalize': 0})
     await stream_content(f'''Agent "{os.environ['LLM_NAME']}" initialized successfully. How may I assist you today?''')
 
@@ -314,7 +345,7 @@ async def on_chat_end() -> None:
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
     if message.content.strip().lower() == 'clear':
-        cl.user_session.set('state', {'messages': [get_system_message()], 'first_msg_idx_to_normalize': 1})
+        cl.user_session.set('state', {'messages': [get_opening_system_message()], 'first_msg_idx_to_normalize': 1})
         #cl.user_session.set('state', {'messages': [], 'first_msg_idx_to_normalize': 0})
         await stream_content('Chat history has been cleared. How may I assist you today?')
     else:
