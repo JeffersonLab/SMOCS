@@ -181,7 +181,7 @@ async def get_agent(tools: list):
     graph = StateGraph(AgentState)
     graph.add_node('llm_call', llm_call)
     graph.add_node('human_approval', human_approval)
-    graph.add_node('tools', ToolNode(tools=tools, messages_key='messages'))
+    graph.add_node('tools', ToolNode(tools=tools, messages_key='messages', handle_tool_errors=True))
     graph.add_edge(START, 'llm_call')
     graph.add_conditional_edges(
         'llm_call',

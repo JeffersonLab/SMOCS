@@ -1,5 +1,6 @@
 import os
 import yaml
+import traceback
 from fastmcp import FastMCP
 import subprocess
 
@@ -19,7 +20,7 @@ def write_yaml(path: str, val: dict | list | str | int | float | bool | None) ->
         val: JSON-serializable Python object to write as YAML.
 
     Returns:
-        string indicating successful file writing or failure with the traceback error message.
+        string indicating successful file writing or failure with the full traceback error message.
 
     Notes:
         - Existing files are overwritten.
@@ -34,8 +35,8 @@ def write_yaml(path: str, val: dict | list | str | int | float | bool | None) ->
         with open(path, 'w') as file:
             yaml.safe_dump(val, file, indent=4, sort_keys=True, default_flow_style=False)
         return f'File "{path}" written successfully'
-    except Exception as e:
-        return f'An error occurred during the execution of write_yaml:\n{repr(e)}'
+    except Exception:
+        return f'An error occurred during the execution of write_yaml:\n{traceback.format_exc()}'
 
 
 @mcp.tool()
@@ -54,7 +55,7 @@ def read_file(path: str) -> dict | list | str | int | float | bool | None:
         For .yaml/.yml files: the parsed content as dict, list, str, int, float,
         bool, or None depending on the YAML structure.
         For all other files: the full file contents as a string.
-        If an error occurs, a string containing the error message is returned instead.
+        If an error occurs, a string containing the full traceback is returned instead.
     """
     try:
         if path.endswith(('.yaml', '.yml')):
@@ -63,8 +64,8 @@ def read_file(path: str) -> dict | list | str | int | float | bool | None:
         else:
             with open(path, 'r', encoding='utf-8') as file:
                 return file.read()
-    except Exception as e:
-        return f'An error occurred during the execution of read_file:\n{repr(e)}'
+    except Exception:
+        return f'An error occurred during the execution of read_file:\n{traceback.format_exc()}'
 
 
 @mcp.tool()
@@ -77,7 +78,7 @@ def write_file(path: str, val: str) -> str:
         val: Text content to write.
 
     Returns:
-        string indicating successful file writing or failure with the traceback error message.
+        string indicating successful file writing or failure with the full traceback error message.
 
     Notes:
         - Existing files are overwritten.
@@ -89,8 +90,8 @@ def write_file(path: str, val: str) -> str:
         with open(path, 'w', encoding='utf-8') as file:
             file.write(val)
         return f'File "{path}" written successfully'
-    except Exception as e:
-        return f'An error occurred during the execution of write_file:\n{repr(e)}'
+    except Exception:
+        return f'An error occurred during the execution of write_file:\n{traceback.format_exc()}'
 
 
 @mcp.tool()
@@ -104,7 +105,7 @@ def list_directory(path: str) -> str:
     Returns:
         A string representing the directory tree, with each entry on its own line.
         Directories are marked with a trailing "/".
-        If an error occurs, a string containing the error message is returned instead.
+        If an error occurs, a string containing the full traceback is returned instead.
 
     Notes:
         - Hidden files and directories (names starting with ".") are included.
@@ -127,8 +128,8 @@ def list_directory(path: str) -> str:
             for fname in filenames:
                 lines.append(f'{subindent}{fname}')
         return '\n'.join(lines)
-    except Exception as e:
-        return f'An error occurred during the execution of list_directory:\n{repr(e)}'
+    except Exception:
+        return f'An error occurred during the execution of list_directory:\n{traceback.format_exc()}'
 
 
 @mcp.tool()
@@ -143,7 +144,7 @@ def launch_containers() -> str:
         docker compose up -d --force-recreate
 
     Returns:
-        A status message indicating whether the containers were launched successfully or an error occurred.
+        A status message indicating whether the containers were launched successfully, or the full traceback if an error occurred.
 
     Notes:
         - Forces a full image rebuild without using Docker cache.
@@ -158,12 +159,13 @@ def launch_containers() -> str:
             'docker compose build --no-cache --pull && docker compose up -d --force-recreate',
             shell=True,
             cwd=compose_dir,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=None,
         )
         return 'Building images and launching containers in the background ... It might take a few moments for all services to be up and running.'
-    except Exception as e:
-        return f'An error occurred during the execution of launch_containers:\n{repr(e)}'
+    except Exception:
+        return f'An error occurred during the execution of launch_containers:\n{traceback.format_exc()}'
 
 
 
