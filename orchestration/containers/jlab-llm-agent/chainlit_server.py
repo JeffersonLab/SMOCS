@@ -4,6 +4,7 @@ import time
 import yaml
 import uuid
 import myers
+import inspect
 from typing import Annotated, List, TypedDict
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -142,10 +143,10 @@ async def get_agent(tools: list):
         ).send()
         
         if res and res.get('payload', {}).get('decision') == 'yes':
-            await stream_content(f'✅ **Approved tool call(s):**\n\n{tool_text}')
+            await cl.Message(content=f'✅ **Approved tool call(s):**\n\n{tool_text}').send()
             return {}
         else:
-            await stream_content(f'❌ **Rejected tool call(s):**\n\n{tool_text}')
+            await cl.Message(content=f'❌ **Rejected tool call(s):**\n\n{tool_text}').send()
             # Rejected - ask for feedback
             feedback_res = await cl.AskUserMessage(
                 content='Tool execution blocked. Please provide feedback or a new instruction:',
@@ -229,8 +230,8 @@ def get_system_message() -> SystemMessage:
     docs_content = '\n\n---\n\n'.join(docs_sections)
 
     system_message = SystemMessage(
-        content = f'''
-        You are a specialized assistant for the SMOCS system.
+        content = inspect.cleandoc(f'''
+        You are a specialized assistant for the SMOCS system powered by {os.environ["LLM_NAME"]}.
         You help users read and answer questions about the current configuration, generate or edit configuration files, and launch the system.
 
         ## Rules
@@ -249,7 +250,7 @@ def get_system_message() -> SystemMessage:
         ## SMOCS Documentation
 
         {docs_content}
-        '''.strip()
+        ''')
     )
     return system_message
 
@@ -320,29 +321,34 @@ async def on_message(message: cl.Message) -> None:
         agent = cl.user_session.get('agent')
         state = cl.user_session.get('state')
         state['messages'].append(HumanMessage(content=message.content))
-        t_0 = time.perf_counter()
-        async for update_dict in agent.astream(state, stream_mode='updates'):
-            update_time = time.perf_counter() - t_0
-            nodes_names = list(update_dict.keys())      # Only one item in update_dict since there are no parallel branches in agent.
-            #await stream_content(f'Nodes "{nodes_names}" finished in {update_time:.2f} sec')
-            node_name = nodes_names[0]
-            if node_name == 'llm_call':
-                async with cl.Step(name=f'Thinking  ({update_time:.2f}s)', type='llm'):
-                    pass
-            elif node_name == 'tools':
-                last_ai_msg = next(m for m in reversed(state['messages']) if isinstance(m, AIMessage))
-                tool_names = ', '.join(tc['name'] for tc in last_ai_msg.tool_calls)
-                async with cl.Step(name=f'Calling: {tool_names}  ({update_time:.2f}s)', type='tool'):
-                    pass
-            for state_delta in update_dict.values():
-                # state_delta has what is returned from the nodes, not the aggregated full state
-                if isinstance(state_delta, dict) and ('messages' in state_delta):
-                    new_msgs = state_delta['messages']
-                    state['messages'].extend(new_msgs)
-                    for msg in new_msgs:
-                        if isinstance(msg, AIMessage) and msg.content:
-                            await stream_content(msg.content)
-            t_0 = time.perf_counter()
+        active_step = None
+        active_step_t0 = None
+        async for mode, chunk in agent.astream(state, stream_mode=['updates', 'debug']):
+            if mode == 'debug':
+                if chunk['type'] == 'task':
+                    node_name = chunk['payload']['name']
+                    if node_name == 'llm_call':
+                        active_step = cl.Step(name='LLM...', type='llm')
+                    elif node_name == 'tools':
+                        active_step = cl.Step(name='Tool(s)...', type='tool')
+                    # human_approval is skipped — AskActionMessage already provides its own UI feedback
+                    if active_step:
+                        await active_step.__aenter__()   # opens spinner in UI
+                        active_step_t0 = time.perf_counter()
+                elif chunk['type'] == 'task_result' and active_step:
+                    elapsed = time.perf_counter() - active_step_t0
+                    active_step.name = active_step.name.replace('...', f'  ({elapsed:.2f}s)')
+                    await active_step.__aexit__(None, None, None)  # closes spinner, displays updated name
+                    active_step = None
+            elif mode == 'updates':
+                for state_delta in chunk.values():
+                    # state_delta has what is returned from the nodes, not the aggregated full state
+                    if isinstance(state_delta, dict) and ('messages' in state_delta):
+                        new_msgs = state_delta['messages']
+                        state['messages'].extend(new_msgs)
+                        for msg in new_msgs:
+                            if isinstance(msg, AIMessage) and msg.content:
+                                await stream_content(msg.content)
         cl.user_session.set('state', state)
 
 
