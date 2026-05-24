@@ -237,7 +237,7 @@ def get_system_message() -> SystemMessage:
         ## Rules
         - Do NOT invent fields, keys, or structures not present in the documentation below.
         - Do NOT make unrequested edits.
-        - If the request is missing required information, ask a concise clarification question. Do NOT guess or assume missing values.
+        - If the request is missing required information, ask a concise clarification question. Do NOT guess or assume missing keys/values.
         - Keep the data types the same when generating new configurations. For example, if a field is a list of strings in the documentation, it should NOT be changed to a single string or a dict.
         - When editing an existing configuration file, keep the structure and formatting as similar as possible to the original file. For example, if one of the fields in the original file is a list of ints and the user did not ask you to change it, do not unnecessarily change it to a list of floats.
         - Anytime you change one of the config files (i.e., 'config.yaml', 'docker-compose.yml', '.env'), you should check the others as well to keep them consistent. For example, if you add a new agent in `config.yaml`, you would also need to add that agent in `docker-compose.yml` to make sure it gets launched, and probably also add some relevant environment variables in `.env`. So please make sure to check all config files for consistency after any edit or generation.
@@ -341,14 +341,16 @@ async def on_message(message: cl.Message) -> None:
                     await active_step.__aexit__(None, None, None)  # closes spinner, displays updated name
                     active_step = None
             elif mode == 'updates':
-                for state_delta in chunk.values():
-                    # state_delta has what is returned from the nodes, not the aggregated full state
-                    if isinstance(state_delta, dict) and ('messages' in state_delta):
-                        new_msgs = state_delta['messages']
-                        state['messages'].extend(new_msgs)
-                        for msg in new_msgs:
-                            if isinstance(msg, AIMessage) and msg.content:
-                                await stream_content(msg.content)
+                # chunk is a dict with only 1 key-value pair, where the key is the name of the node that just returned an update, and the value is the state delta returned from that node (not the full state, just the new info to be merged into the state)
+                # Only 1 key is present because the graph is designed such that there are no parallel edges, so only 1 node can return an update at a time.
+                node_name = list(chunk.keys())[0]       # can be one of 'llm_call', 'human_approval', 'tools'
+                state_delta = chunk[node_name]      # state_delta has what is returned from the nodes, not the aggregated full state                 
+                if isinstance(state_delta, dict) and ('messages' in state_delta):
+                    new_msgs = state_delta['messages']
+                    state['messages'].extend(new_msgs)
+                    for msg in new_msgs:
+                        if isinstance(msg, AIMessage) and msg.content:
+                            await stream_content(msg.content)
         cl.user_session.set('state', state)
 
 
@@ -370,4 +372,12 @@ Add the following to the configurations:
 Keep the configuration structure the same without making any removals. Just make the additions listed above. Then save those configs to the same path (i.e., overwrite the file).
 e)
 Launch containers
+
+
+
+1) In config.yaml, don't change data types (ex: floats to ints) unnecessarily. Just add agent 3 configs.
+2) In docker-compose.yml, you are making more changes than necessary. You only need to add the agent 3 service and its corresponding volume in the volumes section. You can keep the rest of the file exactly the same.
+3) Any recommended edits for the .env file?
+
+Overall, keep the changes in any file minimal and surgical to satisfy my requests.
 '''
