@@ -246,10 +246,11 @@ services:
     container_name: jlab-llm-agent
     profiles: ["jlab-llm-agent"]
     restart: unless-stopped
+    env_file:
+      - path: ../.env.API_KEY       # SMOCS/.env.API_KEY - JLAB_API_KEY
+        required: true
     environment:
-      API_TYPE: openai
       LLM_URL: "https://API.delphi.jlab.org"
-      API_KEY: ${API_KEY}
       #LLM_NAME: "openai/gpt-oss-120b"
       #LLM_NAME: "Qwen/Qwen3-30B-A3B-Instruct-2507"
       LLM_NAME: "google/gemma-4-31B-it"
