@@ -205,7 +205,7 @@ async def get_agent(tools: list):
 
 
     # Setup
-    llm = ChatOpenAI(base_url=os.environ['LLM_URL'], api_key=os.environ['LLM_KEY'], model=os.environ['LLM_NAME'], temperature=0.0)
+    llm = ChatOpenAI(base_url=os.environ['LLM_URL'], api_key=os.environ['API_KEY'], model=os.environ['LLM_NAME'], temperature=0.0)
     llm = llm.bind_tools(tools)
 
     # Build graph
