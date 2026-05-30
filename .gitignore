@@ -1,4 +1,5 @@
 orchestration/tb-logs/
+orchestration/containers/llm-agent/base-image-built
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -212,10 +212,14 @@ services:
       kafka-broker:
         condition: service_healthy
   
+  # NOTE: Before building jlab-llm-agent or ollama-agent for the first time (or after modifying
+  # containers/llm-agent/Dockerfile), build the shared base image first:
+  #   docker build -t llm-agent-base:latest -f orchestration/containers/llm-agent/Dockerfile orchestration/containers/llm-agent/
+
   ollama-agent:
     build:
-      context: ./containers/ollama-agent
-      dockerfile: Dockerfile
+      context: ./containers/llm-agent
+      dockerfile: ./ollama-agent/Dockerfile
     container_name: ollama-agent
     profiles: ["ollama-agent"]
     deploy:
@@ -226,6 +230,7 @@ services:
               count: 1
               capabilities: [gpu]
     environment:
+      API_TYPE: ollama
       LLM_NAME: qwen3-coder:30b                      # good & small BUT required special parsing for tool call | qwen2.5-coder:14b-instruct ==> so many edits | qwen2.5/3:14b good but not enough | phi4:14b has no tool calling | mistral-small:24b is bad at using tools | qwen3:30b didn't yield better results
       OLLAMA_CONTEXT_LENGTH: 4096                    # ollama config
       OLLAMA_KEEP_ALIVE: -1                           # Keep model in VRAM indefinitely between requests
@@ -241,8 +246,8 @@ services:
   
   jlab-llm-agent:
     build:
-      context: ./containers/jlab-llm-agent
-      dockerfile: Dockerfile
+      context: ./containers/llm-agent
+      dockerfile: ./jlab-llm-agent/Dockerfile
     container_name: jlab-llm-agent
     profiles: ["jlab-llm-agent"]
     restart: unless-stopped
@@ -250,6 +255,7 @@ services:
       - path: ../.env.API_KEY       # SMOCS/.env.API_KEY - JLAB_API_KEY
         required: true
     environment:
+      API_TYPE: openai
       LLM_URL: "https://API.delphi.jlab.org"
       #LLM_NAME: "openai/gpt-oss-120b"
       #LLM_NAME: "Qwen/Qwen3-30B-A3B-Instruct-2507"
