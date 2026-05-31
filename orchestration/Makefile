@@ -6,7 +6,7 @@ SENTINEL := containers/llm-agent/base-image-built
 $(SENTINEL):
 	docker build -t llm-agent-base:latest \
 		-f containers/llm-agent/Dockerfile \
-		containers/llm-agent/
+		.
 	touch $(SENTINEL)
 
 build-jlab: $(SENTINEL)
@@ -19,7 +19,7 @@ build-ollama: $(SENTINEL)
 rebuild-base:
 	docker build -t llm-agent-base:latest \
 		-f containers/llm-agent/Dockerfile \
-		containers/llm-agent/
+		.
 	touch $(SENTINEL)
 
 # Remove sentinel so the next build-jlab/build-ollama re-triggers base image build

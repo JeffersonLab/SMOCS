@@ -215,12 +215,12 @@ services:
   # NOTE: Before building jlab-llm-agent or ollama-agent for the first time (or after modifying
   # containers/llm-agent/Dockerfile), build the shared base image first.
   # Preferred (from orchestration/): make build-jlab  OR  make build-ollama  — handles base image automatically.
-  # Manual fallback (from orchestration/): docker build -t llm-agent-base:latest -f containers/llm-agent/Dockerfile containers/llm-agent/
+  # Manual fallback (from orchestration/): docker build -t llm-agent-base:latest -f containers/llm-agent/Dockerfile .
 
   ollama-agent:
     build:
-      context: ./containers/llm-agent
-      dockerfile: ./ollama-agent/Dockerfile
+      context: ./
+      dockerfile: ./containers/llm-agent/ollama-agent/Dockerfile
     container_name: ollama-agent
     profiles: ["ollama-agent"]
     deploy:
@@ -247,8 +247,8 @@ services:
   
   jlab-llm-agent:
     build:
-      context: ./containers/llm-agent
-      dockerfile: ./jlab-llm-agent/Dockerfile
+      context: ./
+      dockerfile: ./containers/llm-agent/jlab-llm-agent/Dockerfile
     container_name: jlab-llm-agent
     profiles: ["jlab-llm-agent"]
     restart: unless-stopped

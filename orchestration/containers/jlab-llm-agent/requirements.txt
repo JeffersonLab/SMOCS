@@ -1,7 +1,0 @@
-PyYAML==6.0.3
-langgraph==1.1.9
-langchain-openai==1.2.1
-langchain-mcp-adapters==0.2.2
-fastmcp==3.2.4
-chainlit==2.11.1
-myers==1.0.1

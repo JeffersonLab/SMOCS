@@ -33,5 +33,5 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 
 WORKDIR /app
 
-COPY ./requirements.txt ./requirements-shared.txt
+COPY ./containers/llm-agent/requirements.txt ./requirements-shared.txt
 RUN pip install --no-cache-dir -r requirements-shared.txt

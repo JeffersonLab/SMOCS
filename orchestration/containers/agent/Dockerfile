@@ -1,11 +1,16 @@
+# syntax=docker/dockerfile:1
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Fix corporate SSL ==> IMPORTANT NOTE: copied from /etc/ssl/certs/ca-bundle.crt
-COPY ./orchestration/containers/agent/ca-bundle.crt /usr/local/share/ca-certificates/ca-bundle.crt
-RUN apt-get update && \
-    apt-get install -y ca-certificates && \
-    update-ca-certificates
+# Step 1: Install ca-certificates package
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Step 2: Corporate SSL certificate (JLab-specific). Skipped automatically if ca-bundle.crt is absent or empty.
+RUN --mount=type=bind,source=.,target=/ctx \
+    if [ -f /ctx/orchestration/ca-bundle.crt ] && [ -s /ctx/orchestration/ca-bundle.crt ]; then \
+        cp /ctx/orchestration/ca-bundle.crt /usr/local/share/ca-certificates/ca-bundle.crt && \
+        update-ca-certificates; \
+    fi
 
 # Install system dependencies including Python 3.9
 RUN apt-get update && \
