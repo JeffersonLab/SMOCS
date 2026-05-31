@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(**/.env.API_KEY)",
+      "Read(**/ca-bundle.crt)"
+    ]
+  }
+}

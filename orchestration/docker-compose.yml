@@ -213,8 +213,9 @@ services:
         condition: service_healthy
   
   # NOTE: Before building jlab-llm-agent or ollama-agent for the first time (or after modifying
-  # containers/llm-agent/Dockerfile), build the shared base image first:
-  #   docker build -t llm-agent-base:latest -f orchestration/containers/llm-agent/Dockerfile orchestration/containers/llm-agent/
+  # containers/llm-agent/Dockerfile), build the shared base image first.
+  # Preferred (from orchestration/): make build-jlab  OR  make build-ollama  — handles base image automatically.
+  # Manual fallback (from orchestration/): docker build -t llm-agent-base:latest -f containers/llm-agent/Dockerfile containers/llm-agent/
 
   ollama-agent:
     build:

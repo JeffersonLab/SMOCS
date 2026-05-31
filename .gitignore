@@ -1,5 +1,7 @@
 orchestration/tb-logs/
 orchestration/containers/llm-agent/base-image-built
+SMOCS_DOCS
+**/ca-bundle.crt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
