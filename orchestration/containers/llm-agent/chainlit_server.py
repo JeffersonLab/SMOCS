@@ -127,12 +127,11 @@ async def get_agent(tools: list):
 
                 filepath = tool_call['args']['path']
                 val = tool_call['args']['val']
-                # write_yaml: val is a dict, so serialize to YAML string for diffing.
-                # write_file: val is already a plain-text string.
-                if tool_call['name'] == 'write_yaml':
-                    val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
-                else:
+                # Serialize val to a YAML string for diffing if it's not already a plain-text string.
+                if isinstance(val, str):
                     val_str = val
+                else:
+                    val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
                 if os.path.isfile(filepath):
                     # Apply myers algorithm to determine the shortest path of changes from old_val_str to val_str
                     # NOTE: difflib.ndiff did NOT work well when there are common sections. It shows the changes in unexpected places.

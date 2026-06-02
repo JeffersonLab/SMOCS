@@ -69,13 +69,13 @@ def read_file(path: str) -> dict | list | str | int | float | bool | None:
 
 
 @mcp.tool()
-def write_file(path: str, val: str) -> str:
+def write_file(path: str, val: dict | list | str | int | float | bool | None) -> str:
     """
     Write text val to a file on disk.
 
     Args:
         path: Destination file path.
-        val: Text content to write.
+        val: Text content to write. Should be a plain string. Non-string values are serialized to YAML before writing.
 
     Returns:
         string indicating successful file writing or failure with the full traceback error message.
@@ -87,6 +87,8 @@ def write_file(path: str, val: str) -> str:
         - Intended for writing source code, configuration files, logs, or general text files.
     """
     try:
+        if not isinstance(val, str):
+            val = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
         with open(path, 'w', encoding='utf-8') as file:
             file.write(val)
         return f'File "{path}" written successfully'
