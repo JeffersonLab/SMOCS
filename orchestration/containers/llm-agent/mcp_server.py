@@ -11,35 +11,6 @@ mcp = FastMCP('my_mcp')
 
 
 @mcp.tool()
-def write_yaml(path: str, val: dict | list | str | int | float | bool | None) -> str:
-    """
-    Serialize and write structured data to a YAML file.
-
-    Args:
-        path: Destination file path.
-        val: JSON-serializable Python object to write as YAML.
-
-    Returns:
-        string indicating successful file writing or failure with the full traceback error message.
-
-    Notes:
-        - Existing files are overwritten.
-        - Parent directories must already exist.
-        - Uses yaml.safe_dump() with:
-            - indent=4
-            - sort_keys=True
-            - block-style formatting
-        - Intended for writing configuration or structured data files.
-    """
-    try:
-        with open(path, 'w') as file:
-            yaml.safe_dump(val, file, indent=4, sort_keys=True, default_flow_style=False)
-        return f'File "{path}" written successfully'
-    except Exception:
-        return f'An error occurred during the execution of write_yaml:\n{traceback.format_exc()}'
-
-
-@mcp.tool()
 def read_file(path: str) -> dict | list | str | int | float | bool | None:
     """
     Read a file from disk and return its contents.
@@ -58,11 +29,10 @@ def read_file(path: str) -> dict | list | str | int | float | bool | None:
         If an error occurs, a string containing the full traceback is returned instead.
     """
     try:
-        if path.endswith(('.yaml', '.yml')):
-            with open(path, 'r') as file:
+        with open(path, 'r', encoding='utf-8') as file:
+            if path.lower().endswith(('.yaml', '.yml')):
                 return yaml.safe_load(file)
-        else:
-            with open(path, 'r', encoding='utf-8') as file:
+            else:
                 return file.read()
     except Exception:
         return f'An error occurred during the execution of read_file:\n{traceback.format_exc()}'
@@ -71,11 +41,15 @@ def read_file(path: str) -> dict | list | str | int | float | bool | None:
 @mcp.tool()
 def write_file(path: str, val: dict | list | str | int | float | bool | None) -> str:
     """
-    Write text val to a file on disk.
+    Write val to a file on disk.
+
+    Mirrors read_file: if the extension is .yaml or .yml, val is serialized with
+    yaml.safe_dump and written as YAML. Otherwise val is written as plain text
+    (non-string values are serialized to YAML as a fallback).
 
     Args:
         path: Destination file path.
-        val: Text content to write. Should be a plain string. Non-string values are serialized to YAML before writing.
+        val: For .yaml/.yml files: any JSON-serializable object. For all other files: a plain string.
 
     Returns:
         string indicating successful file writing or failure with the full traceback error message.
@@ -83,14 +57,15 @@ def write_file(path: str, val: dict | list | str | int | float | bool | None) ->
     Notes:
         - Existing files are overwritten.
         - Parent directories must already exist.
-        - File is written using UTF-8 encoding.
-        - Intended for writing source code, configuration files, logs, or general text files.
     """
     try:
-        if not isinstance(val, str):
-            val = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
         with open(path, 'w', encoding='utf-8') as file:
-            file.write(val)
+            if path.lower().endswith(('.yaml', '.yml')):
+                yaml.safe_dump(val, file)
+            else:
+                if not isinstance(val, str):
+                    val = yaml.safe_dump(val)
+                file.write(val)
         return f'File "{path}" written successfully'
     except Exception:
         return f'An error occurred during the execution of write_file:\n{traceback.format_exc()}'

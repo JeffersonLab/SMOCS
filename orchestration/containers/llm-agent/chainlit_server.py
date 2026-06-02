@@ -13,6 +13,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import ToolNode
 import chainlit as cl
+from mcp_server import read_file
 
 
 API_TYPE = os.environ.get('API_TYPE', '').lower()
@@ -115,7 +116,7 @@ async def get_agent(tools: list):
         # Format tool calls for display
         tool_descriptions = []
         for i, tool_call in enumerate(last_message.tool_calls, 1):
-            if tool_call['name'] in {'write_yaml', 'write_file'}:
+            if tool_call['name'] == 'write_file':
                 if 'path' not in tool_call['args']:
                     return {
                         'messages': [ToolMessage(content='Error: Did not find "path" in tool_call["args"] !', tool_call_id=tool_call['id'])]
@@ -127,21 +128,12 @@ async def get_agent(tools: list):
 
                 filepath = tool_call['args']['path']
                 val = tool_call['args']['val']
-                # Serialize val to a YAML string for diffing if it's not already a plain-text string.
-                if isinstance(val, str):
-                    val_str = val
-                else:
-                    val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
+                val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
                 if os.path.isfile(filepath):
                     # Apply myers algorithm to determine the shortest path of changes from old_val_str to val_str
                     # NOTE: difflib.ndiff did NOT work well when there are common sections. It shows the changes in unexpected places.
-                    with open(filepath, 'r', encoding='utf-8') as file:
-                        # write_yaml: round-trip through yaml to normalize formatting before diffing.
-                        # write_file: read as plain text.
-                        if tool_call['name'] == 'write_yaml':
-                            old_val_str = yaml.safe_dump(yaml.safe_load(file), sort_keys=True, indent=4, default_flow_style=False)
-                        else:
-                            old_val_str = file.read()
+                    old_val_str = read_file(path=filepath)
+                    old_val_str = yaml.safe_dump(old_val_str, sort_keys=True, indent=4, default_flow_style=False)
                     # a) Single file with "+/-" to indicate insertions/removals
                     diff_result = myers.diff(old_val_str.splitlines(), val_str.splitlines())
                     final_output = []
