@@ -228,14 +228,15 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 2
               capabilities: [gpu]
     environment:
       API_TYPE: ollama
-      LLM_NAME: qwen3-coder:30b                      # good & small BUT required special parsing for tool call | qwen2.5-coder:14b-instruct ==> so many edits | qwen2.5/3:14b good but not enough | phi4:14b has no tool calling | mistral-small:24b is bad at using tools | qwen3:30b didn't yield better results
-      OLLAMA_CONTEXT_LENGTH: 4096                    # ollama config
+      LLM_NAME: qwen3-coder:30b                       # good & small BUT required special parsing for tool call | qwen2.5-coder:14b-instruct ==> so many edits | qwen2.5/3:14b good but not enough | phi4:14b has no tool calling | mistral-small:24b is bad at using tools | qwen3:30b didn't yield better results
+      OLLAMA_NUM_CTX: 131072                          # read by Ollama server as server-wide default (overrides vram heuristic and Modelfile); model supports up to 262144
+      OLLAMA_CONTEXT_LENGTH: 131072                   # read by Python/ChatOllama as per-request num_ctx fallback
       OLLAMA_KEEP_ALIVE: -1                           # Keep model in VRAM indefinitely between requests
-      #OLLAMA_KV_CACHE_TYPE: q8_0                     # biggest win: halves KV cache VRAM
+      OLLAMA_KV_CACHE_TYPE: q8_0                      # required at 131072 ctx: ~16GB KV cache vs ~32GB at f16; fits within ~22GB available after model
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
       - ../SMOCS_DOCS:/app/SMOCS_DOCS:ro              # Expose documentation

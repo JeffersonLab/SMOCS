@@ -246,7 +246,13 @@ async def get_agent(tools: list):
     if API_TYPE == 'openai':
         llm = ChatOpenAI(base_url=os.environ['LLM_URL'], api_key=os.environ['API_KEY'], model=os.environ['LLM_NAME'], temperature=0.0)
     elif API_TYPE == 'ollama':
-        llm = ChatOllama(model=os.environ['LLM_NAME'], temperature=0.0)
+        if os.environ.get('OLLAMA_NUM_CTX'):
+            _num_ctx = int(os.environ['OLLAMA_NUM_CTX'])
+        elif os.environ.get('OLLAMA_CONTEXT_LENGTH'):
+            _num_ctx = int(os.environ['OLLAMA_CONTEXT_LENGTH'])
+        else:
+            _num_ctx = None
+        llm = ChatOllama(model=os.environ['LLM_NAME'], temperature=0.0, num_ctx=_num_ctx)
     llm = llm.bind_tools(tools)
 
     # Build graph
