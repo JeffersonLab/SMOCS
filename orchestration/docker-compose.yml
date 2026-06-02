@@ -212,10 +212,9 @@ services:
       kafka-broker:
         condition: service_healthy
   
-  # NOTE: Before building jlab-llm-agent or ollama-agent for the first time (or after modifying
-  # containers/llm-agent/Dockerfile), build the shared base image first.
-  # Preferred (from orchestration/): make build-jlab  OR  make build-ollama  — handles base image automatically.
-  # Manual fallback (from orchestration/): docker build -t llm-agent-base:latest -f containers/llm-agent/Dockerfile .
+  # NOTE: Before building jlab-llm-agent or ollama-agent,
+  # first build the shared base image via the following command from the orchestration directory:
+  # docker build -t llm-agent-base:latest -f ./containers/llm-agent/Dockerfile .
 
   ollama-agent:
     build:
@@ -233,10 +232,10 @@ services:
     environment:
       API_TYPE: ollama
       LLM_NAME: qwen3-coder:30b                       # good & small BUT required special parsing for tool call | qwen2.5-coder:14b-instruct ==> so many edits | qwen2.5/3:14b good but not enough | phi4:14b has no tool calling | mistral-small:24b is bad at using tools | qwen3:30b didn't yield better results
-      OLLAMA_NUM_CTX: 131072                          # read by Ollama server as server-wide default (overrides vram heuristic and Modelfile); model supports up to 262144
-      OLLAMA_CONTEXT_LENGTH: 131072                   # read by Python/ChatOllama as per-request num_ctx fallback
+      OLLAMA_NUM_CTX: 262144                          # This variable is prioritized over OLLAMA_CONTEXT_LENGTH if the ollama model supports it.
+      OLLAMA_CONTEXT_LENGTH: 262144
       OLLAMA_KEEP_ALIVE: -1                           # Keep model in VRAM indefinitely between requests
-      OLLAMA_KV_CACHE_TYPE: q8_0                      # required at 131072 ctx: ~16GB KV cache vs ~32GB at f16; fits within ~22GB available after model
+      OLLAMA_KV_CACHE_TYPE: q8_0                      # to reduce KV cache size
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
       - ../SMOCS_DOCS:/app/SMOCS_DOCS:ro              # Expose documentation
