@@ -1,1 +1,1 @@
-langchain-openai==1.2.1
+langchain-openai==1.2.2
