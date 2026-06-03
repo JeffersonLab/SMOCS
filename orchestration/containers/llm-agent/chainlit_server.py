@@ -419,31 +419,3 @@ async def on_message(message: cl.Message) -> None:
                         if isinstance(msg, AIMessage) and msg.content:
                             await stream_content(msg.content)
         cl.user_session.set('state', state)
-
-
-
-'''
-Queries
--------
-a)
-List down all the "PVs" in the "epics" service in the "./orchestration/config.yaml" file.
-b)
-Which agent uses the first two only?
-c)
-Show me all the configs of agent 2 then.
-d)
-Add the following to the configurations:
-1. Append a new PV called "IPMK501.XPOS" to the list of epics PVs
-2. Add a new autoencoder called "autoencoder_agent3" that is identical to "autoencoder_agent2". The only difference is that it uses "IPMK501.XPOS" only instead of using "IPMK203.XPOS" and "IPMK203.YPOS".
-Keep the configuration structure the same without making any removals. Just make the additions listed above. Then save those configs to the same path (i.e., overwrite the file).
-e)
-Launch containers
-
-
-
-1) In config.yaml, don't change data types (ex: floats to ints) unnecessarily. Just add agent 3 configs.
-2) In docker-compose.yml, you are making more changes than necessary. You only need to add the agent 3 service and its corresponding volume in the volumes section. You can keep the rest of the file exactly the same.
-3) Any recommended edits for the .env file?
-
-Overall, keep the changes in any file minimal and surgical to satisfy my requests.
-'''
