@@ -182,7 +182,7 @@ def launch_containers() -> str:
             stdout=subprocess.DEVNULL,
             stderr=None,
         )
-        return 'Building images and launching containers in the background ... It might take a few moments for all services to be up and running.'
+        return 'Building images and launching containers in the background. It might take a few moments for all services to be up and running. Inform the user that they can use the Docker CLI to check on the status of the containers (e.g., `docker ps` to list running containers, `docker compose ps` to see service health, or `docker logs <container_name>` to inspect a specific container\'s output).'
     except Exception:
         return f'An error occurred during the execution of launch_containers:\n{traceback.format_exc()}'
 
