@@ -276,6 +276,7 @@ def _fetch_docs() -> None:
         _docs_status = 'no_link'
         _docs_cache = ''
         return
+    token = os.environ.get('GITLAB_TOKEN', '')
     try:
         parsed = urlparse(link)
         base_url = f'{parsed.scheme}://{parsed.netloc}'
@@ -285,7 +286,6 @@ def _fetch_docs() -> None:
 
         project_encoded = quote(project_path, safe='')
         api_base = f'{base_url}/api/v4/projects/{project_encoded}'
-        token = os.environ.get('GITLAB_TOKEN', '')
         headers = {'PRIVATE-TOKEN': token} if token else {}
 
         blobs, page = [], 1
@@ -317,7 +317,10 @@ def _fetch_docs() -> None:
         _docs_cache = '\n\n---\n\n'.join(docs_sections)
         _docs_status = 'ok'
     except Exception:
-        _docs_cache = traceback.format_exc()
+        tb = traceback.format_exc()
+        if token:
+            tb = tb.replace(token, '[REDACTED]')
+        _docs_cache = tb
         _docs_status = 'error'
 
 
