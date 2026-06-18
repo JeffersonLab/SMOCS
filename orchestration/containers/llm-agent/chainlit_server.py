@@ -3,7 +3,6 @@ import re
 import time
 import yaml
 import uuid
-import myers
 import inspect
 from typing import Annotated, List, TypedDict
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -13,7 +12,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import ToolNode
 import chainlit as cl
-from mcp_server import read_file
+from mcp_server import read_file, myers_diff
 
 
 API_TYPE = os.environ.get('API_TYPE', '').lower()
@@ -130,32 +129,11 @@ async def get_agent(tools: list):
                 val = tool_call['args']['val']
                 val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
                 if os.path.isfile(filepath):
-                    # Apply myers algorithm to determine the shortest path of changes from old_val_str to val_str
-                    # NOTE: difflib.ndiff did NOT work well when there are common sections. It shows the changes in unexpected places.
-                    old_val_str = read_file(path=filepath)
-                    old_val_str = yaml.safe_dump(old_val_str, sort_keys=True, indent=4, default_flow_style=False)
-                    # a) Single file with "+/-" to indicate insertions/removals
-                    diff_result = myers.diff(old_val_str.splitlines(), val_str.splitlines())
-                    final_output = []
-                    for action, line in diff_result:
-                        if action == 'k':
-                            # keep
-                            final_output.append(f"  {line}")  # Two spaces for alignment
-                        elif action == 'r':
-                            # remove
-                            final_output.append(f"- {line}")  # Minus for deletions
-                        elif action == 'i':
-                            # insert
-                            final_output.append(f"+ {line}")  # Plus for additions
-                        else:
-                            # omit
-                            assert action == 'o', f'actions can be one of KEEP/REMOVE/INSERT/OMIT (k/r/i/o) !!!'
-                            raise NameError('Undefined behavior with OMIT "o" action !!!')
-                    final_output: str = '\n'.join(final_output)
-                    # b) TODO: More fancy side-by-side view like vscode
+                    old_val = read_file(path=filepath)
+                    final_output = myers_diff(val_1=old_val, val_2=val)
                     txt = f"### Tool {i}: `{tool_call['name']}`\n**📝 Overwriting File:** `{filepath}`\n```diff\n{final_output}\n```"
                 else:
-                    txt = f"### Tool {i}: `{tool_call['name']}`\n**📝 File:** `{filepath}`\n```diff\n{val_str}\n```"
+                    txt = f"### Tool {i}: `{tool_call['name']}`\n**📝 New File:** `{filepath}`\n```text\n{yaml.safe_dump(val)}\n```"        # yaml.safe_dump without sorting because this is how write_file saved the file
             else:
                 txt = f"### Tool {i}: `{tool_call['name']}`\n**Args:** `{tool_call['args']}`"
             tool_descriptions.append(txt)
@@ -337,7 +315,7 @@ async def on_chat_start() -> None:
             'command': 'python',
             'args': [os.path.join(os.path.dirname(__file__), 'mcp_server.py')],
             'transport': 'stdio',
-            'env': os.environ.copy(),   # forward all parent env vars to the mcp subprocess
+            'env': {},
         }
     }
     mcp_client = MultiServerMCPClient(mcp_client_configs)
