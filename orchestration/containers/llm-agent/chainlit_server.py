@@ -4,6 +4,9 @@ import time
 import yaml
 import uuid
 import inspect
+import traceback
+import requests
+from urllib.parse import urlparse, quote
 from typing import Annotated, List, TypedDict
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -262,19 +265,79 @@ async def stream_content(content: str) -> cl.Message:
     return msg
 
 
+_docs_cache = None
+_docs_status = None  # 'ok' | 'no_link' | 'error'
+
+
+def _fetch_docs() -> None:
+    global _docs_cache, _docs_status
+    link = os.environ.get('DOCUMENTATION_LINK', '')
+    if not link:
+        _docs_status = 'no_link'
+        _docs_cache = ''
+        return
+    try:
+        parsed = urlparse(link)
+        base_url = f'{parsed.scheme}://{parsed.netloc}'
+        path_parts = parsed.path.split('/-/tree/')
+        project_path = path_parts[0].lstrip('/')
+        ref, _, tree_path = path_parts[1].partition('/')
+
+        project_encoded = quote(project_path, safe='')
+        api_base = f'{base_url}/api/v4/projects/{project_encoded}'
+        token = os.environ.get('GITLAB_TOKEN', '')
+        headers = {'PRIVATE-TOKEN': token} if token else {}
+
+        blobs, page = [], 1
+        while True:
+            resp = requests.get(
+                f'{api_base}/repository/tree',
+                params={'path': tree_path, 'ref': ref, 'recursive': True, 'per_page': 100, 'page': page},
+                headers=headers, timeout=30,
+            )
+            resp.raise_for_status()
+            items = resp.json()
+            if not items:
+                break
+            blobs.extend(i for i in items if i['type'] == 'blob' and i['name'].endswith('.md'))
+            if len(items) < 100:
+                break
+            page += 1
+
+        blobs.sort(key=lambda x: x['path'])
+
+        docs_sections = []
+        for blob in blobs:
+            raw_url = f'{base_url}/{project_path}/-/raw/{ref}/{blob["path"]}'
+            resp = requests.get(raw_url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            rel_path = os.path.relpath(blob['path'], tree_path)
+            docs_sections.append(f'### {rel_path}\n\n{resp.text.strip()}')
+
+        _docs_cache = '\n\n---\n\n'.join(docs_sections)
+        _docs_status = 'ok'
+    except Exception:
+        _docs_cache = traceback.format_exc()
+        _docs_status = 'error'
+
+
 def get_opening_system_message() -> SystemMessage:
-    docs_dir = os.path.join(os.path.dirname(__file__), '../../../SMOCS_DOCS')
-    docs_sections = []
-    for dirpath, dirnames, filenames in os.walk(docs_dir):
-        dirnames.sort()
-        for filename in sorted(filenames):
-            if filename.endswith('.md'):
-                filepath = os.path.join(dirpath, filename)
-                rel_path = os.path.relpath(filepath, docs_dir)
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                docs_sections.append(f'### {rel_path}\n\n{content}')
-    docs_content = '\n\n---\n\n'.join(docs_sections)
+    global _docs_cache, _docs_status
+    if _docs_status is None:
+        _fetch_docs()
+
+    if _docs_status == 'ok':
+        doc_rule    = '- Do NOT invent fields, keys, or structures not present in the documentation below.'
+        smocs_note  = '- `/app/smocs/` — Python source code. Read this when the documentation below is insufficient.'
+        doc_section = f'## SMOCS Documentation\n\n{_docs_cache}'
+    elif _docs_status == 'no_link':
+        doc_rule    = '- Do NOT invent fields, keys, or structures not present in the source code.'
+        smocs_note  = '- `/app/smocs/` — Python source code. Read this for implementation details and schema reference.'
+        doc_section = ''
+    else:  # error
+        doc_rule    = '- Do NOT invent fields, keys, or structures not present in the source code.'
+        smocs_note  = '- `/app/smocs/` — Python source code. Read this for implementation details and schema reference.'
+        doc_section = f'## SMOCS Documentation\n\n(Documentation could not be fetched — see error below.)\n\n{_docs_cache}'
 
     system_message = SystemMessage(
         content = inspect.cleandoc(f'''
@@ -282,7 +345,7 @@ def get_opening_system_message() -> SystemMessage:
         You help users read and answer questions about the current configuration, generate or edit configuration files, and launch the system.
 
         ## Rules
-        - Do NOT invent fields, keys, or structures not present in the documentation below.
+        {doc_rule}
         - Do NOT make unrequested edits.
         - If the request is missing required information, ask a concise clarification question. Do NOT guess or assume missing keys/values.
         - Keep the data types the same when generating new configurations. For example, if a field is a list of strings in the documentation, it should NOT be changed to a single string or a dict.
@@ -291,12 +354,10 @@ def get_opening_system_message() -> SystemMessage:
         - Never edit the "jlab-llm-agent" or "ollama-agent" services in the docker-compose.yml file as those have nothing to do with the SMOCS system itself. They are just there to provide the user interface and LLM capabilities for you to assist the user with the SMOCS system.
 
         ## Available Resources
-        - `/app/smocs/` — Python source code. Read this when the documentation below is insufficient.
+        {smocs_note}
         - `/app/orchestration/` — Live configuration files (`config.yaml`, `docker-compose.yml`, `.env`).
 
-        ## SMOCS Documentation
-
-        {docs_content}
+        {doc_section}
         ''')
     )
     return system_message

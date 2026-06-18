@@ -236,9 +236,9 @@ services:
       OLLAMA_CONTEXT_LENGTH: 262144
       OLLAMA_KEEP_ALIVE: -1                           # Keep model in VRAM indefinitely between requests
       OLLAMA_KV_CACHE_TYPE: q8_0                      # to reduce KV cache size
+      DOCUMENTATION_LINK: "https://code.jlab.org/datascience/smocs_docs/-/tree/main/docs?ref_type=heads"
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
-      - ../SMOCS_DOCS:/app/SMOCS_DOCS:ro              # Expose documentation
       - ../smocs:/app/smocs:ro                        # Expose code
       - ../orchestration:/app/orchestration:rw        # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
       - ollama-models:/root/.ollama:rw                # To pull the LLM_NAME model only during the first run.
@@ -261,9 +261,9 @@ services:
       #LLM_NAME: "openai/gpt-oss-120b"
       #LLM_NAME: "Qwen/Qwen3-30B-A3B-Instruct-2507"
       LLM_NAME: "google/gemma-4-31B-it"
+      DOCUMENTATION_LINK: "https://code.jlab.org/datascience/smocs_docs/-/tree/main/docs?ref_type=heads"
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
-      - ../SMOCS_DOCS:/app/SMOCS_DOCS:ro              # Expose documentation
       - ../smocs:/app/smocs:ro                        # Expose code
       - ../orchestration:/app/orchestration:rw        # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
     ports:
