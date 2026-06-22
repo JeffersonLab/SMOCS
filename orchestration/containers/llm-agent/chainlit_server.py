@@ -3,6 +3,7 @@ import re
 import time
 import yaml
 import uuid
+import myers
 import inspect
 import traceback
 import requests
@@ -15,7 +16,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import ToolNode
 import chainlit as cl
-from mcp_server import read_file, myers_diff
+from mcp_server import read_file
 
 
 API_TYPE = os.environ.get('API_TYPE', '').lower()
@@ -31,6 +32,47 @@ else:
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     first_msg_idx_to_normalize: int = 0
+
+
+def myers_diff(val_1: dict | list | str | int | float | bool | None, val_2: dict | list | str | int | float | bool | None) -> str:
+    """
+    Compute a line-level diff between val_1 and val_2 using the Myers diff algorithm.
+
+    Both values are first serialized with yaml.safe_dump (sorted keys, 4-space indent) so
+    the diff is always over a canonical text representation. This means you can pass the
+    Python objects returned by read_file directly without any pre-processing.
+
+    Args:
+        val_1: Any object that could be returned by read_file.
+        val_2: Any object that could be returned by read_file.
+
+    Returns:
+        A string where each line is prefixed with:
+          "  " (two spaces) for unchanged lines,
+          "- " for lines present only in val_1,
+          "+ " for lines present only in val_2.
+        If an error occurs, a string containing the full traceback is returned instead.
+        On success, always present the returned diff inside a markdown ```diff code block so it renders with syntax highlighting.
+    """
+    try:
+        str_1 = yaml.safe_dump(val_1, sort_keys=True, indent=4, default_flow_style=False)
+        str_2 = yaml.safe_dump(val_2, sort_keys=True, indent=4, default_flow_style=False)
+        diff_result = myers.diff(str_1.splitlines(), str_2.splitlines())
+        final_output = []
+        for action, line in diff_result:
+            if action == 'k':
+                final_output.append(f'  {line}')
+            elif action == 'r':
+                final_output.append(f'- {line}')
+            elif action == 'i':
+                final_output.append(f'+ {line}')
+            else:
+                assert action == 'o', f'actions can be one of KEEP/REMOVE/INSERT/OMIT (k/r/i/o) !!!'
+                raise NameError('Undefined behavior with OMIT "o" action !!!')
+        return '\n'.join(final_output)
+    except Exception:
+        print(f'Logging the error: {traceback.format_exc()}')
+        raise
 
 
 
@@ -130,7 +172,6 @@ async def get_agent(tools: list):
 
                 filepath = tool_call['args']['path']
                 val = tool_call['args']['val']
-                val_str = yaml.safe_dump(val, sort_keys=True, indent=4, default_flow_style=False)
                 if os.path.isfile(filepath):
                     old_val = read_file(path=filepath)
                     final_output = myers_diff(val_1=old_val, val_2=val)
