@@ -4,7 +4,7 @@ FROM python:3.12-slim
 # Step 1: Install ca-certificates package (needed for update-ca-certificates; Debian apt repos are HTTP so this is safe before the cert is set up)
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Step 2: Corporate SSL certificate (JLab-specific). Skipped automatically if ca-bundle.crt is absent or empty.
+# Step 2: Corporate SSL certificate (JLab-specific). Typically copied from /etc/ssl/certs/ to the orchestration directory. Skipped automatically if ca-bundle.crt is absent or empty.
 RUN --mount=type=bind,source=.,target=/ctx \
     if [ -f /ctx/ca-bundle.crt ] && [ -s /ctx/ca-bundle.crt ]; then \
         cp /ctx/ca-bundle.crt /usr/local/share/ca-certificates/ca-bundle.crt && \
