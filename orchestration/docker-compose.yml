@@ -261,7 +261,7 @@ services:
       LLM_NAME: "google/gemma-4-31B-it"
       DOCUMENTATION_LINK: "https://code.jlab.org/datascience/smocs_docs/-/tree/main/docs?ref_type=heads"
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-      API_KEY: ${API_KEY?API_KEY must be set}
+      API_KEY: ${API_KEY:-}
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
       - ../smocs:/app/smocs:ro                        # Expose code
