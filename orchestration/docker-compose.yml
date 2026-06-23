@@ -162,6 +162,9 @@ services:
   autoencoder-agent1:
     extends: agent
     profiles: ["autoencoder1"]
+    env_file:
+      - path: ../.env.secrets           # Needed for MYSQL_ROOT_PASSWORD
+        required: true
     environment:
       AGENT_TYPE: autoencoder
       AGENT_CONFIG: autoencoder_agent1
@@ -174,6 +177,9 @@ services:
   autoencoder-agent2:
     extends: agent
     profiles: ["autoencoder2"]
+    env_file:
+      - path: ../.env.secrets           # Needed for MYSQL_ROOT_PASSWORD
+        required: true
     environment:
       AGENT_TYPE: autoencoder
       AGENT_CONFIG: autoencoder_agent2
