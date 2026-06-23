@@ -37,14 +37,13 @@ services:
       - "8086:8086"
     volumes:
       - influxdb-data:/var/lib/influxdb2
-    env_file:
-      - path: ../.env.secrets           # Needed for DOCKER_INFLUXDB_INIT_PASSWORD & INFLUXDB_TOKEN
-        required: true
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${DOCKER_INFLUXDB_INIT_PASSWORD}
       DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
       DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8086/ping"]
       interval: 10s
@@ -82,13 +81,11 @@ services:
   mqtt-kafka-producer:
     extends: source-kafka-producer
     profiles: ["mqtt"]
-    env_file:
-      - path: ../.env.secrets           # Needed for MQTT_PASSWORD (optional)
-        required: false
     environment:
       MQTT_BROKER: ${MQTT_BROKER}
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
       SMOCS_LOG_LEVEL: INFO
     command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
 
@@ -120,13 +117,11 @@ services:
         condition: service_healthy
       influxdb:
         condition: service_healthy
-    env_file:
-      - path: ../.env.secrets           # Needed for INFLUXDB_TOKEN
-        required: true
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
       KAFKA_TOPIC: my-topic
       INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
       PYTHONPATH: /app
@@ -143,15 +138,13 @@ services:
     depends_on:
       kafka-broker:
         condition: service_healthy
-    env_file:
-      - path: ../.env.secrets           # Needed for MYSQL_ROOT_PASSWORD
-        required: true
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
       MYSQL_HOST: ${MYSQL_HOST}  
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CONFIG_PATH: /app/config.yaml
       PYTHONPATH: /app
     networks:
@@ -162,9 +155,6 @@ services:
   autoencoder-agent1:
     extends: agent
     profiles: ["autoencoder1"]
-    env_file:
-      - path: ../.env.secrets           # Needed for MYSQL_ROOT_PASSWORD
-        required: true
     environment:
       AGENT_TYPE: autoencoder
       AGENT_CONFIG: autoencoder_agent1
@@ -177,9 +167,6 @@ services:
   autoencoder-agent2:
     extends: agent
     profiles: ["autoencoder2"]
-    env_file:
-      - path: ../.env.secrets           # Needed for MYSQL_ROOT_PASSWORD
-        required: true
     environment:
       AGENT_TYPE: autoencoder
       AGENT_CONFIG: autoencoder_agent2
@@ -224,7 +211,7 @@ services:
     depends_on:
       kafka-broker:
         condition: service_healthy
-  
+
   # NOTE: Before building jlab-llm-agent or ollama-agent,
   # first build the shared base image via the following command from the orchestration directory:
   # docker build -t llm-agent-base:latest -f ./containers/llm-agent/Dockerfile .
@@ -242,9 +229,6 @@ services:
             - driver: nvidia
               count: 2
               capabilities: [gpu]
-    env_file:
-      - path: ../.env.secrets           # Optionally for GITLAB_TOKEN
-        required: false
     environment:
       API_TYPE: ollama
       LLM_NAME: qwen3-coder:30b                       # good & small BUT required special parsing for tool call | qwen2.5-coder:14b-instruct ==> so many edits | qwen2.5/3:14b good but not enough | phi4:14b has no tool calling | mistral-small:24b is bad at using tools | qwen3:30b didn't yield better results
@@ -253,6 +237,7 @@ services:
       OLLAMA_KEEP_ALIVE: -1                           # Keep model in VRAM indefinitely between requests
       OLLAMA_KV_CACHE_TYPE: q8_0                      # to reduce KV cache size
       DOCUMENTATION_LINK: "https://code.jlab.org/datascience/smocs_docs/-/tree/main/docs?ref_type=heads"
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
       - ../smocs:/app/smocs:ro                        # Expose code
@@ -260,7 +245,7 @@ services:
       - ollama-models:/root/.ollama:rw                # To pull the LLM_NAME model only during the first run.
     ports:
       - "8000:8000"                               # chainlit default port is 8000. Post is mapped to access chainlit from localhost
-  
+
   jlab-llm-agent:
     build:
       context: ./
@@ -268,9 +253,6 @@ services:
     container_name: jlab-llm-agent
     profiles: ["jlab-llm-agent"]
     restart: unless-stopped
-    env_file:
-      - path: ../.env.secrets           # Needed for API_KEY & optionally GITLAB_TOKEN
-        required: true
     environment:
       API_TYPE: openai
       LLM_URL: "https://API.delphi.jlab.org"
@@ -278,13 +260,15 @@ services:
       #LLM_NAME: "Qwen/Qwen3-30B-A3B-Instruct-2507"
       LLM_NAME: "google/gemma-4-31B-it"
       DOCUMENTATION_LINK: "https://code.jlab.org/datascience/smocs_docs/-/tree/main/docs?ref_type=heads"
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      API_KEY: ${API_KEY?API_KEY must be set}
     volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
       - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
       - ../smocs:/app/smocs:ro                        # Expose code
       - ../orchestration:/app/orchestration:rw        # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
     ports:
       - "8000:8000"                               # chainlit default port is 8000. Post is mapped to access chainlit from localhost
-        
+
 volumes:
   influxdb-data:
   grafana-storage:
@@ -297,4 +281,3 @@ volumes:
 
 networks:
   kafka-net:
-    driver: bridge

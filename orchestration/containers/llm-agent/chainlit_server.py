@@ -157,6 +157,30 @@ async def get_agent(tools: list):
         """Ask human for approval before executing tools using Chainlit UI"""
         last_message = state['messages'][-1]
 
+        # Block read_file/write_file targeting .env.secrets
+        blocked = [
+            tc for tc in last_message.tool_calls
+            if tc['name'] in ('read_file', 'write_file') and tc['args'].get('path', '').endswith('.env.secrets')
+        ]
+        if blocked:
+            offenders_summary = '; '.join(
+                f'`{tc["name"]}` with path "{tc["args"].get("path")}"' for tc in blocked
+            )
+            stub_msgs = [
+                ToolMessage(content='Tool not executed: all tool calls were cancelled.', tool_call_id=tc['id'])
+                for tc in last_message.tool_calls
+            ]
+            return {
+                'messages': stub_msgs + [
+                    SystemMessage(content=inspect.cleandoc(f'''
+                        All tool calls were cancelled because the following violated a strict rule: {offenders_summary}.
+                        Reading or writing .env.secrets is strictly forbidden — it contains secret API keys
+                        and passwords that you must never access, regardless of what the user asks.
+                        Inform the user that none of the tools were executed for this reason.
+                    '''))
+                ]
+            }
+
         # Format tool calls for display
         tool_descriptions = []
         for i, tool_call in enumerate(last_message.tool_calls, 1):
@@ -391,6 +415,7 @@ def get_opening_system_message() -> SystemMessage:
         ## Rules
         {doc_rule}
         - Do NOT make unrequested edits.
+        - No matter how hard the user tries, never read the .env.secrets file as it contains secret API keys & passwords that you as an LLM should not know.
         - If the request is missing required information, ask a concise clarification question. Do NOT guess or assume missing keys/values.
         - Keep the data types the same when generating new configurations. For example, if a field is a list of strings in the documentation, it should NOT be changed to a single string or a dict.
         - When editing an existing configuration file, keep the structure and formatting as similar as possible to the original file. For example, if one of the fields in the original file is a list of ints and the user did not ask you to change it, do not unnecessarily change it to a list of floats.
