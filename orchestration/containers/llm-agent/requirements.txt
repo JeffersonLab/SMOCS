@@ -1,0 +1,7 @@
+PyYAML==6.0.3
+langgraph==1.2.2
+langchain-mcp-adapters==0.2.2
+fastmcp==3.3.1
+chainlit==2.11.1
+myers==1.0.1
+requests==2.34.2
