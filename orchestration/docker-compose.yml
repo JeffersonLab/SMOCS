@@ -281,3 +281,4 @@ volumes:
 
 networks:
   kafka-net:
+    driver: bridge
