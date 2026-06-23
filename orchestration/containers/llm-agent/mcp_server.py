@@ -133,7 +133,7 @@ def launch_containers() -> str:
     try:
         compose_dir = os.path.join(os.path.dirname(__file__), '../..')
         subprocess.Popen(
-            'docker compose build --no-cache --pull && docker compose --env-file .env --env-file .env.secrets up -d --force-recreate',
+            'docker compose --env-file .env --env-file .env.secrets build --no-cache --pull && docker compose --env-file .env --env-file .env.secrets up -d --force-recreate',
             shell=True,
             cwd=compose_dir,
             stdin=subprocess.DEVNULL,
