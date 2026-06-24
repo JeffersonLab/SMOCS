@@ -140,6 +140,41 @@ autoencoder_agent2:
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
 
+conditional_autoencoder_agent1:
+  preprocessing_pipeline:
+    - bounds_normalizer
+    - window_processor
+  window_size: 5
+  min_training_samples: 100
+  encoder_dims: [64, 32, 16]
+  learning_rate: 0.0001
+  batch_size: 16
+  samples_multiplier: 3
+  epochs: 10
+  anomaly_threshold_type: fixed
+  threshold: 0.001
+  enabled_threads: ['ingest', 'training', 'inference']
+  model_input:
+    channels:
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+    bounds:
+      - [-2.0, 2.0]
+      - [-2.0, 2.0]
+    context_channels:
+      - IGLK100HVPSkVolts
+    context_bounds:
+      - [-1.0, 1.0]
+    context_tolerance: 0.05  # test-data units — scalar applies to all context channels
+  model_output:
+    channels:
+      - IPMK203.XPOS
+      - IPMK203.YPOS
+  kafka_topics:
+    input: "CEBAF"
+    output: "cae1-anomalies"
+    training_output: "cae1-training-results"
+
 rl_control_agent1:
   environment: "Pendulum-v1"
   soct_agent_type: "KerasTD3-v0"
