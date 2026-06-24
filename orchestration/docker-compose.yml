@@ -177,12 +177,12 @@ services:
     volumes:
       - mysql-data-ae2:/var/lib/mysql
 
-  conditional-autoencoder-agent1:
+  contextual-autoencoder-agent1:
     extends: agent
-    profiles: ["conditional-autoencoder1"]
+    profiles: ["contextual-autoencoder1"]
     environment:
-      AGENT_TYPE: conditional_autoencoder
-      AGENT_CONFIG: conditional_autoencoder_agent1
+      AGENT_TYPE: contextual_autoencoder
+      AGENT_CONFIG: contextual_autoencoder_agent1
       SMOCS_LOG_LEVEL: INFO
     ports:
       - "3309:3306"

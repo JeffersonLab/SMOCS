@@ -140,7 +140,7 @@ autoencoder_agent2:
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
 
-conditional_autoencoder_agent1:
+contextual_autoencoder_agent1:
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor

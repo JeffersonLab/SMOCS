@@ -59,7 +59,7 @@ def _parse_context_atol(raw_tol, n_context_channels: int) -> np.ndarray:
 # Data ingest thread
 # ---------------------------------------------------------------------------
 
-class ConditionalAutoencoderDataIngestThread(AutoencoderDataIngestThread):
+class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
     """
     Extends the plain AE ingest thread so that both input channels and context
     channels are written into the state blob.  Everything else (switch check,
@@ -85,7 +85,7 @@ class ConditionalAutoencoderDataIngestThread(AutoencoderDataIngestThread):
 # Training thread
 # ---------------------------------------------------------------------------
 
-class ConditionalAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
+class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
     """
     Extends the plain AE training thread with a context-conditioned architecture.
 
@@ -323,7 +323,7 @@ class ConditionalAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 # Inference thread
 # ---------------------------------------------------------------------------
 
-class ConditionalAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
+class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
     """
     Extends the plain AE inference thread with:
       - context-conditioned model prediction
@@ -600,7 +600,7 @@ class ConditionalAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 # Agent
 # ---------------------------------------------------------------------------
 
-class ConditionalAutoencoderAgent(AutoencoderAgent):
+class ContextualAutoencoderAgent(AutoencoderAgent):
     """
     Drop-in replacement for AutoencoderAgent that uses context-conditioned threads.
 
@@ -613,17 +613,17 @@ class ConditionalAutoencoderAgent(AutoencoderAgent):
 
     def create_data_ingest_component(self):
         if 'ingest' in self.enabled_threads:
-            return ConditionalAutoencoderDataIngestThread(self.agent_id, self.agent_config)
+            return ContextualAutoencoderDataIngestThread(self.agent_id, self.agent_config)
         return None
 
     def create_ml_training_component(self):
         if 'training' in self.enabled_threads:
-            return ConditionalAutoencoderMLTrainingThread(self.agent_id, self.agent_config)
+            return ContextualAutoencoderMLTrainingThread(self.agent_id, self.agent_config)
         return None
 
     def create_ml_inference_component(self):
         if 'inference' in self.enabled_threads:
-            return ConditionalAutoencoderMLInferenceThread(self.agent_id, self.agent_config)
+            return ContextualAutoencoderMLInferenceThread(self.agent_id, self.agent_config)
         return None
 
 
@@ -636,7 +636,7 @@ def main():
     parser.add_argument(
         "--agent_config_key",
         type=str,
-        default='conditional_autoencoder_agent1',
+        default='contextual_autoencoder_agent1',
         help="Key for this agent's section in config.yaml",
     )
     args = parser.parse_args()
@@ -645,12 +645,12 @@ def main():
     config_path = os.getenv('CONFIG_PATH', '/app/config.yaml')
 
     try:
-        agent = ConditionalAutoencoderAgent(config_path, args.agent_config_key)
+        agent = ContextualAutoencoderAgent(config_path, args.agent_config_key)
         agent.start()
     except KeyboardInterrupt:
-        logging.info("Shutting down conditional autoencoder agent...")
+        logging.info("Shutting down contextual autoencoder agent...")
     except Exception as e:
-        logging.error(f"Error running conditional autoencoder agent: {e}")
+        logging.error(f"Error running contextual autoencoder agent: {e}")
         raise
 
 
