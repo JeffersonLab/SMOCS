@@ -91,7 +91,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.anomaly_threshold_type = config.get('anomaly_threshold_type', 'fixed')
 
         if self.anomaly_threshold_type == 'percentile':
-            self.threshold_precentile = config.get('threshold_percentile', 95.0)
+            self.threshold_percentile = config.get('threshold_percentile', 95.0)
         else:
             self.fixed_anomaly_threshold = config.get('threshold', 0.02)
             
@@ -391,13 +391,13 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}")
             return {'error': str(e)}
         
-    def get_anomaly_threshold(self, errors: np.ndarray, percentile: float = 95.0) -> float:
+    def get_anomaly_threshold(self, errors: np.ndarray) -> float:
         """
         Calculate anomaly detection threshold based on reconstruction errors.
         
         Args:
             errors: Array of reconstruction errors
-            percentile: Percentile to use for threshold (default 95.0)
+
             
         Returns:
             Threshold value
@@ -405,7 +405,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         if len(errors) == 0:
             return self.anomaly_threshold
         if self.anomaly_threshold_type == 'percentile':
-            threshold = float(np.percentile(errors, self.threshold_precentile))
+            threshold = float(np.percentile(errors, self.threshold_percentile))
         else:
             threshold = self.fixed_anomaly_threshold # Default fixed threshold if unknown type
         return threshold
