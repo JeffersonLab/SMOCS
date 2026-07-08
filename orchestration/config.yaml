@@ -157,5 +157,43 @@ rl_control_agent1:
     log_lock_wait_threshold_ms: 100
   logdir: "./logs/rl_agent1"
 
+linear_regression_agent1:
+  enabled_threads: ['inference']
+  model_input:
+    channel: SOL:i:BarPress2
+  model_output:
+    name: predicted_fdc_gain
+  regression_parameters:
+    intercept: -1.649127
+    coefficient: 1.969937e-02
+  kafka_topics:
+    input: "CEBAF"
+    output: "linear-regression1-predictions"
+
+linear_regression_agent2:
+  enabled_threads: ['inference']
+  model_input:
+    channels:
+      - SOL:i:BarPress2
+      - gas_density
+  model_output:
+    channels:
+      - calib_const_a
+      - calib_const_b
+  regression_parameters:
+    calib_const_a:
+      intercept: 0.0
+      coefficients:
+        SOL:i:BarPress2: 1.0
+        gas_density: 0.0
+    calib_const_b:
+      intercept: 0.0
+      coefficients:
+        SOL:i:BarPress2: 0.0
+        gas_density: 1.0
+  kafka_topics:
+    input: "CEBAF"
+    output: "linear-regression2-predictions"
+
 project:
   name: "smocs-gymnasium-rl-control"
