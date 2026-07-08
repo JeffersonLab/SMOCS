@@ -98,8 +98,10 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
     def __init__(self, agent_id: str, config: Dict[str, Any]):
         model_input = config.get('model_input', {})
-        # Set before super().__init__() because load_existing_model() is called
-        # from super and our override of _validate_architecture_compatibility reads these.
+        # super().__init__() calls load_existing_model() which in turn calls the
+        # _validate_architecture_compatibility defined in this child class that uses
+        # self.n_context_channels, so if self.n_context_channels is not set before
+        # super().__init__(), that would be too late.
         self.n_input_channels = len(model_input.get('channels', []))
         self.n_context_channels = len(model_input.get('context_channels', []))
         self.context_dim = None
@@ -119,9 +121,9 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             try:
                 with open("/app/models/latest_model.json", 'r') as f:
                     metadata = json.load(f)
-                self.context_dim = metadata.get('context_dim')
-            except Exception:
-                pass
+                self.context_dim = metadata.get('architecture_config', {}).get('context_dim')
+            except Exception as e:
+                logging.error(f"ContextualAutoencoderMLTrainingThread: Error loading existing model: {e}")
 
     def _validate_architecture_compatibility(self, saved_arch: Dict) -> bool:
         if not super()._validate_architecture_compatibility(saved_arch):
@@ -143,7 +145,6 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         try:
             with open(latest_file, 'r') as f:
                 metadata = json.load(f)
-            metadata['context_dim'] = self.context_dim
             metadata['architecture_config']['context_dim'] = self.context_dim
             with open(latest_file, 'w') as f:
                 json.dump(metadata, f, indent=2)
@@ -332,8 +333,6 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
     def __init__(self, agent_id: str, config: Dict[str, Any]):
         model_input = config.get('model_input', {})
-        # Must be set before super().__init__() because MLInferenceThreadBase.__init__()
-        # calls self.load_model() and our override reads these attributes.
         self.n_input_channels = len(model_input.get('channels', []))
         self.n_context_channels = len(model_input.get('context_channels', []))
         self.context_dim = None
@@ -384,7 +383,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             try:
                 with open("/app/models/latest_model.json", 'r') as f:
                     metadata = json.load(f)
-                self.context_dim = metadata.get('context_dim')
+                self.context_dim = metadata.get('architecture_config', {}).get('context_dim')
                 logging.info(f"CAEMLInferenceThread: context_dim={self.context_dim}")
             except Exception as e:
                 logging.warning(f"CAEMLInferenceThread: Could not read context_dim: {e}")
