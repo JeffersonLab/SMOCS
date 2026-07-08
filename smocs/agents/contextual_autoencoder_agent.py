@@ -67,7 +67,7 @@ class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
     """
 
     def __init__(self, agent_id: str, config: Dict[str, Any]):
-        super().__init__(agent_id, config)
+        super().__init__(agent_id, config)  # sets up DB, Kafka consumer, and channel filter (input channels only)
         # Rebuild channel filter to capture input + context in one pass.
         # The base class built it with input channels only.
         model_input = config.get('model_input', {})
@@ -106,7 +106,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         self.n_context_channels = len(model_input.get('context_channels', []))
         self.context_dim = None
 
-        super().__init__(agent_id, config)
+        super().__init__(agent_id, config)  # sets window_size/encoder_dims/etc., creates preprocessing_manager (input channels only), and calls load_existing_model()
 
         # Context preprocessing manager (super created the input one already)
         self.context_preprocessing_manager = PreprocessingManager(
@@ -116,17 +116,30 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
     # -- model persistence --------------------------------------------------
 
     def load_existing_model(self):
-        super().load_existing_model()
+        """
+        Load existing model from filesystem if available.
+        Extends the base implementation to also restore context_dim.
+        """
+        super().load_existing_model()  # reads metadata, validates pipeline+architecture, loads TF model, restores input_dim and last_training_count
         if self.model is not None:
             try:
                 with open("/app/models/latest_model.json", 'r') as f:
                     metadata = json.load(f)
                 self.context_dim = metadata.get('architecture_config', {}).get('context_dim')
             except Exception as e:
-                logging.error(f"ContextualAutoencoderMLTrainingThread: Error loading existing model: {e}")
+                logging.error(f"CAEMLTrainingThread: Error loading existing model: {e}")
 
     def _validate_architecture_compatibility(self, saved_arch: Dict) -> bool:
-        if not super()._validate_architecture_compatibility(saved_arch):
+        """
+        Validate that saved and current model architectures match.
+
+        Args:
+            saved_arch: Architecture config from saved model metadata
+
+        Returns:
+            True if compatible, False otherwise
+        """
+        if not super()._validate_architecture_compatibility(saved_arch):  # checks encoder_dims and window_size
             return False
         saved_ctx = saved_arch.get('context_dim')
         expected_ctx = self.n_context_channels * self.window_size
@@ -139,8 +152,12 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         return True
 
     def save_model(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
+        """
+        Save trained model to local directory with atomic writes.
+        Extends the base implementation to also persist context_dim in the metadata.
+        """
         # Let super() handle the atomic file write, then patch context_dim in.
-        super().save_model(model_metrics, eval_results)
+        super().save_model(model_metrics, eval_results)  # writes model .h5 and latest_model.json via atomic .tmp → rename
         latest_file = "/app/models/latest_model.json"
         try:
             with open(latest_file, 'r') as f:
@@ -155,10 +172,11 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
     def build_model(self, input_dim: int, context_dim: int = None):
         """
-        Functional Keras model:
-          encoder : concat(input, context) → bottleneck
-          decoder : concat(bottleneck, context) → reconstructed_input
-        The decoder target is the input only; context is never reconstructed.
+        Create context-conditioned autoencoder with specified input and context dimensions.
+
+        Args:
+            input_dim: Size of input/output layer (window_size * n_input_channels)
+            context_dim: Size of context layer (window_size * n_context_channels)
         """
         if context_dim is None:
             context_dim = self.n_context_channels * self.window_size
@@ -186,11 +204,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         )
         self.input_dim = input_dim
 
-        logging.info(
-            f"CAEMLTrainingThread: Built CAE — "
-            f"input_dim={input_dim}, context_dim={context_dim}, "
-            f"encoder_dims={self.encoder_dims}"
-        )
+        logging.info(f"CAEMLTrainingThread: Built contextual autoencoder: input_dim={input_dim}, context_dim={context_dim}, encoder_dims={self.encoder_dims}")
 
     # -- data / training / eval ---------------------------------------------
 
@@ -200,23 +214,27 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
     def get_training_data(self) -> Optional[np.ndarray]:
         """
-        Returns shape (n_windows, window_size*(n_input+n_context)).
-        Columns [:input_split] are preprocessed input; [input_split:] are
-        preprocessed context.  The single ndarray keeps training_loop()'s
-        .shape access happy.
+        Retrieve raw training data from database and apply preprocessing pipeline.
+
+        Returns:
+            Combined array of shape (n_windows, window_size*(n_input+n_context)),
+            or None if insufficient data is available.
         """
         try:
             total_samples = self.db_manager.get_size("agent_inferences")
             logging.info(
-                f"CAEMLTrainingThread: Database has {total_samples} samples "
+                f"CAEMLTrainingThread: Database contains {total_samples} samples "
                 f"(need {self.min_training_samples})"
             )
 
             if total_samples < self.min_training_samples:
+                logging.debug(f"CAEMLTrainingThread: Not enough samples for training: {total_samples} < {self.min_training_samples}")
                 return None
             if total_samples <= self.last_training_count:
                 logging.debug("CAEMLTrainingThread: No new data since last training")
                 return None
+
+            logging.info(f"CAEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
 
             batch_data = self.db_manager.sample_batch(
                 batch_size=self.batch_size * self.samples_multiplier,
@@ -225,9 +243,13 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
                 mode="latest",
             )
 
+            logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
+
             if batch_data is None or len(batch_data['state']) == 0:
-                logging.warning("CAEMLTrainingThread: sample_batch returned no data")
+                logging.warning("CAEMLTrainingThread: No batch data returned from database")
                 return None
+
+            logging.info("CAEMLTrainingThread: Starting preprocessing pipeline...")
 
             # states: (batch, window_size, n_input + n_context)
             states = batch_data['state']
@@ -238,16 +260,19 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             context_windows = self.context_preprocessing_manager.execute_pipeline(context_states)
 
             if input_windows is None or len(input_windows) == 0:
-                logging.error("CAEMLTrainingThread: Preprocessing yielded no windows")
+                logging.error("CAEMLTrainingThread: No valid windows created by preprocessing pipeline")
                 return None
 
             combined = np.concatenate([input_windows, context_windows], axis=1)
+
+            logging.info(f"CAEMLTrainingThread: Final combined windowed data shape: {combined.shape}")
+            logging.debug(f"CAEMLTrainingThread: Data range: [{np.min(combined):.6f}, {np.max(combined):.6f}]")
+            logging.debug(f"CAEMLTrainingThread: Data mean: {np.mean(combined):.6f}")
+            logging.debug(f"CAEMLTrainingThread: Data std: {np.std(combined):.6f}")
+
             self.last_training_count = total_samples
 
-            logging.info(
-                f"CAEMLTrainingThread: Prepared {len(combined)} windows "
-                f"(combined shape {combined.shape})"
-            )
+            logging.info(f"CAEMLTrainingThread: Successfully prepared {len(combined)} training windows using preprocessing pipeline")
             return combined
 
         except Exception as e:
@@ -255,6 +280,15 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             return None
 
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
+        """
+        Train the context-conditioned autoencoder model on preprocessed data.
+
+        Args:
+            training_data: Combined array (input + context), already preprocessed.
+
+        Returns:
+            Dict of training metrics, or dict with 'error' key on failure.
+        """
         try:
             split = self._input_split()
             input_data = training_data[:, :split]
@@ -263,10 +297,8 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             if self.model is None:
                 self.build_model(input_data.shape[1], context_data.shape[1])
 
-            logging.info(
-                f"CAEMLTrainingThread: Training — "
-                f"input {input_data.shape}, context {context_data.shape}"
-            )
+            logging.info(f"CAEMLTrainingThread: Training with preprocessed data: input {input_data.shape}, context {context_data.shape}")
+            logging.info(f"CAEMLTrainingThread: Training starting (continuing from existing model: {self.model is not None})")
 
             history = self.model.fit(
                 [input_data, context_data],
@@ -279,9 +311,16 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
             setup_logging()
 
+            logging.info("CAEMLTrainingThread: Training complete")
+
+            final_loss = history.history['loss'][-1]
+            final_val_loss = history.history['val_loss'][-1]
+
+            logging.info(f"CAEMLTrainingThread: Training completed: loss={final_loss:.4f}, val_loss={final_val_loss:.4f}")
+
             return {
-                'loss': float(history.history['loss'][-1]),
-                'val_loss': float(history.history['val_loss'][-1]),
+                'loss': float(final_loss),
+                'val_loss': float(final_val_loss),
                 'epochs_trained': len(history.history['loss']),
                 'training_samples': len(input_data),
             }
@@ -290,6 +329,12 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             return {'error': str(e)}
 
     def eval_model(self) -> Dict[str, Any]:
+        """
+        Evaluate the trained model.
+
+        Returns:
+            Dict of evaluation metrics, or dict with 'error' key on failure.
+        """
         try:
             if self.model is None:
                 return {'error': 'No model to evaluate'}
@@ -308,13 +353,17 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             )
             mse_errors = np.mean((input_subset - reconstructions) ** 2, axis=1)
 
-            return {
+            eval_metrics = {
                 'mean_reconstruction_error': float(np.mean(mse_errors)),
                 'std_reconstruction_error': float(np.std(mse_errors)),
                 'max_reconstruction_error': float(np.max(mse_errors)),
                 'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
                 'eval_samples': n,
             }
+
+            logging.info(f"CAEMLTrainingThread: Model evaluation: mean_error={eval_metrics['mean_reconstruction_error']:.4f}")
+
+            return eval_metrics
         except Exception as e:
             logging.error(f"CAEMLTrainingThread: Error evaluating model: {e}")
             return {'error': str(e)}
@@ -337,7 +386,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
         self.n_context_channels = len(model_input.get('context_channels', []))
         self.context_dim = None
 
-        super().__init__(agent_id, config)
+        super().__init__(agent_id, config)  # sets up window_size, recent_data buffer, preprocessing_manager (input channels only), and Kafka consumer
 
         # Rebuild channel filter: input channels first, context channels second.
         # The base class built it with input channels only.
@@ -365,50 +414,69 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
     # -- storage ------------------------------------------------------------
 
-    def _store_inference_result(self, inference_request, inference_result):
-        # The base class skips storage when status != 'success', but our perform_inference
-        # returns status = 'normal'/'anomaly'/'context_drift'.  Pass a copy with
-        # status='success' so the base class proceeds to write to the DB.
-        super()._store_inference_result(
+    def _store_inference_result(self, inference_request: Dict[str, Any], inference_result: Dict[str, Any]):
+        """
+        Store inference result to database.
+        The base class skips storage when status != 'success', but our perform_inference
+        returns status = 'normal'/'anomaly'/'context_drift'.  Pass a copy with
+        status='success' so the base class proceeds to write to the DB.
+        """
+        super()._store_inference_result(  # stores reconstruction to DB; skips if status != 'success'
             inference_request, dict(inference_result, status='success')
         )
 
     # -- model loading ------------------------------------------------------
 
     def load_model(self):
+        """
+        Load the latest context-conditioned autoencoder model from local directory.
+        Extends the base implementation to also restore context_dim.
+        """
         old_version = self.current_model_version
-        super().load_model()
+        super().load_model()  # reads metadata, loads TF model, sets input_dim, anomaly_threshold, and current_model_version
         # If a new version was loaded, also pull context_dim from its metadata
         if self.current_model_version != old_version and self.model is not None:
             try:
                 with open("/app/models/latest_model.json", 'r') as f:
                     metadata = json.load(f)
                 self.context_dim = metadata.get('architecture_config', {}).get('context_dim')
-                logging.info(f"CAEMLInferenceThread: context_dim={self.context_dim}")
+                logging.info(f"CAEMLInferenceThread: Loaded model v{self.current_model_version}: context_dim={self.context_dim}")
             except Exception as e:
                 logging.warning(f"CAEMLInferenceThread: Could not read context_dim: {e}")
 
     # -- inference ----------------------------------------------------------
 
     def perform_inference(self, inference_request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Perform anomaly and context-drift detection using the context-conditioned model.
+
+        Args:
+            inference_request: Dict with 'sensor_values' and 'timestamp' keys.
+
+        Returns:
+            Dict of inference results, or None if the model is unavailable or the
+            sliding-window buffer is not yet full.
+        """
         try:
             self.check_for_model_updates()
 
             if self.model is None:
                 self.load_model()
                 if self.model is None:
-                    logging.debug("CAEMLInferenceThread: No model available")
+                    logging.debug("CAEMLInferenceThread: No model available for inference")
                     return None
 
             # sensor_values: (n_input + n_context,) in channel-filter order
             sensor_values = inference_request['sensor_values']
             self.recent_data.append(sensor_values)
 
+            # Keep buffer at reasonable size
             if len(self.recent_data) > self.window_size * 2:
                 self.recent_data = self.recent_data[-self.window_size * 2:]
 
+            # Need at least window_size samples for inference
             if len(self.recent_data) < self.window_size:
-                logging.debug("CAEMLInferenceThread: Buffer not yet full")
+                logging.debug("CAEMLInferenceThread: Not enough samples to make a window for inference")
                 return None
 
             # recent_arr: (window_size, n_input + n_context)
@@ -426,8 +494,8 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
                 context_window = self.context_preprocessing_manager.execute_pipeline(
                     [context_window_raw]
                 )
-            except Exception as e:
-                logging.error(f"CAEMLInferenceThread: Preprocessing failed: {e}")
+            except Exception as pipeline_error:
+                logging.error(f"CAEMLInferenceThread: Preprocessing pipeline failed: {pipeline_error}")
                 return None
 
             # Model reconstructs input channels only; context is conditioning only
@@ -435,7 +503,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
                 [input_window, context_window], verbose=0
             )   # (1, T*n_input)
 
-            # Denormalize reconstruction for human-readable output
+            # Denormalize reconstruction to original units (post-processing)
             try:
                 bounds_normalizer = next(
                     (p for p in self.preprocessing_manager.pipeline
@@ -446,10 +514,11 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
                     bounds_normalizer.denormalize(reconstruction_normalized)
                     if bounds_normalizer else reconstruction_normalized
                 )
-            except Exception:
+            except Exception as denorm_error:
+                logging.warning(f"CAEMLInferenceThread: Denormalization failed: {denorm_error}")
                 reconstruction_original = reconstruction_normalized
 
-            # Reconstruction error in normalized space
+            # Compute reconstruction error on preprocessed data
             error_score = float(
                 np.mean((input_window - reconstruction_normalized) ** 2)
             )
@@ -477,7 +546,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             if not is_anomaly and not is_drift:
                 self.last_normal_context_window = context_window_raw.copy()
 
-            # Most-recent timestep for per-channel output fields
+            # Extract most recent timestep for per-channel output fields
             reconstruction_reshaped = reconstruction_original.reshape(
                 self.window_size, self.n_input_channels
             )
@@ -485,15 +554,9 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             most_recent_input = input_window_raw[-1]                   # (n_input,)
 
             if is_anomaly:
-                logging.warning(
-                    f"CAEMLInferenceThread: ANOMALY — "
-                    f"error={error_score:.4f} > threshold={self.anomaly_threshold:.4f}"
-                )
+                logging.warning(f"CAEMLInferenceThread: Anomaly detected: error_score={error_score:.4f} > threshold={self.anomaly_threshold:.4f}")
             if is_drift:
-                logging.warning(
-                    f"CAEMLInferenceThread: CONTEXT DRIFT — "
-                    f"error={error_score:.4f}, context window changed"
-                )
+                logging.warning(f"CAEMLInferenceThread: Context drift detected: error_score={error_score:.4f}, context window changed")
 
             return {
                 'reconstruction_normalized': reconstruction_normalized.flatten(),
@@ -514,13 +577,13 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             }
 
         except Exception as e:
-            logging.error(f"CAEMLInferenceThread: Error in perform_inference: {e}")
+            logging.error(f"CAEMLInferenceThread: Error performing inference: {e}")
             return None
 
     def process_message(self, message, topic, partition, offset) -> Tuple[bool, List[Tuple]]:
         """
-        Mirrors AutoencoderMLInferenceThread.process_message but adds is_drift
-        and status to the output channels dict.
+        Process incoming message with optional channel filtering and return inference results.
+        Extends the base implementation to also report is_drift and status fields.
         """
         try:
             if isinstance(message, bytes):
@@ -532,14 +595,14 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
                 filtered_result = self.channel_filter.filter_channels(message_data)
                 if filtered_result is None:
                     logging.debug(
-                        f"CAEMLInferenceThread: Skipping {topic}:{partition}:{offset} "
-                        f"— channel filter rejected"
+                        f"CAEMLInferenceThread: Skipping message from {topic}:{partition}:{offset} due to channel filtering"
                     )
                     return True, []
                 channel_names, channel_values = filtered_result
             else:
                 filtered_result = ChannelFilter.extract_all_channels(message_data)
                 if filtered_result is None:
+                    logging.debug(f"CAEMLInferenceThread: Skipping message from {topic}:{partition}:{offset} - no valid channels")
                     return True, []
                 channel_names, channel_values = filtered_result
 
@@ -547,7 +610,8 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             message_data['channels'] = filtered_channels
 
             if not self.switch_fn(filtered_channels):
-                logging.debug("CAEMLInferenceThread: Switch OFF, skipping inference")
+                logging.debug("CAEMLInferenceThread: Switch is OFF, inference is not performed on the following message")
+                logging.debug(f"CAEMLInferenceThread: Message {filtered_channels}")
                 return False, []
 
             inference_request = self.parse_inference_request(
@@ -578,20 +642,20 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             most_recent_input = inference_result.get('most_recent_input')
             most_recent_reconstruction = inference_result.get('most_recent_reconstruction')
             if most_recent_input is not None and most_recent_reconstruction is not None:
-                for i, ch in enumerate(model_input_channels):
+                for i, channel_name in enumerate(model_input_channels):
                     if i < len(most_recent_input) and i < len(most_recent_reconstruction):
-                        output_channels[f'{ch}_input'] = float(most_recent_input[i])
-                        output_channels[f'{ch}_reconstructed'] = float(most_recent_reconstruction[i])
+                        output_channels[f'{channel_name}_input'] = float(most_recent_input[i])
+                        output_channels[f'{channel_name}_reconstructed'] = float(most_recent_reconstruction[i])
 
             output_message = {'timestamp': time.time(), 'channels': output_channels}
             kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
             return True, [(kafka_topic, json.dumps(output_message))]
 
         except json.JSONDecodeError as e:
-            logging.error(f"CAEMLInferenceThread: JSON decode error: {e}")
+            logging.error(f"CAEMLInferenceThread: JSON decode error for message from {topic}:{partition}:{offset}: {e}")
             return False, []
         except Exception as e:
-            logging.error(f"CAEMLInferenceThread: Error processing message: {e}")
+            logging.error(f"CAEMLInferenceThread: Error processing inference message: {e}")
             return False, []
 
 
@@ -611,16 +675,19 @@ class ContextualAutoencoderAgent(AutoencoderAgent):
     """
 
     def create_data_ingest_component(self):
+        """Create data ingestion thread component."""
         if 'ingest' in self.enabled_threads:
             return ContextualAutoencoderDataIngestThread(self.agent_id, self.agent_config)
         return None
 
     def create_ml_training_component(self):
+        """Create ML training thread component."""
         if 'training' in self.enabled_threads:
             return ContextualAutoencoderMLTrainingThread(self.agent_id, self.agent_config)
         return None
 
     def create_ml_inference_component(self):
+        """Create ML inference thread component."""
         if 'inference' in self.enabled_threads:
             return ContextualAutoencoderMLInferenceThread(self.agent_id, self.agent_config)
         return None
@@ -631,20 +698,17 @@ class ContextualAutoencoderAgent(AutoencoderAgent):
 # ---------------------------------------------------------------------------
 
 def main():
+    """Main entry point for contextual autoencoder agent."""
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--agent_config_key",
-        type=str,
-        default='contextual_autoencoder_agent1',
-        help="Key for this agent's section in config.yaml",
-    )
+    parser.add_argument("--agent_config_key", help="Key for agent configuration dict in the config file", type=str, default='contextual_autoencoder_agent1')
     args = parser.parse_args()
+    config_key = args.agent_config_key
 
     setup_logging()
     config_path = os.getenv('CONFIG_PATH', '/app/config.yaml')
 
     try:
-        agent = ContextualAutoencoderAgent(config_path, args.agent_config_key)
+        agent = ContextualAutoencoderAgent(config_path, config_key)
         agent.start()
     except KeyboardInterrupt:
         logging.info("Shutting down contextual autoencoder agent...")
