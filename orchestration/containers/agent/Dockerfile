@@ -12,16 +12,16 @@ RUN --mount=type=bind,source=.,target=/ctx \
         update-ca-certificates; \
     fi
 
-# Install system dependencies including Python 3.9
+# Install system dependencies including Python 3.11
 RUN apt-get update && \
     apt-get install -y \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y \
-    python3.9 \
-    python3.9-dev \
-    python3.9-distutils \
+    python3.11 \
+    python3.11-dev \
+    python3.11-distutils \
     python3-pip \
     mysql-server \
     default-mysql-client \
@@ -38,11 +38,11 @@ RUN apt-get update && \
     patchelf \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set Python 3.9 as default python3
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 && \
-    update-alternatives --set python3 /usr/bin/python3.9
+# Set Python 3.11 as default python3
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --set python3 /usr/bin/python3.11
 
-# Upgrade pip for Python 3.9
+# Upgrade pip for Python 3.11
 RUN python3 -m pip install --upgrade pip
 
 RUN pip3 install --no-cache-dir mujoco==3.1.1
@@ -121,4 +121,3 @@ RUN echo "=== Configuration Verification ===" && \
     echo "=== Verification Complete ==="
 
 RUN chmod +x /entrypoint.sh
-
