@@ -33,6 +33,22 @@ git clone https://github.com/JeffersonLab/SMOCS.git
 cd SMOCS
 ```
 
+## Citation
+
+If you use this work, please cite:
+
+```bibtex
+@misc{kasparian2026smocsstreamingframeworksimplified,
+      title={SMOCS: A Streaming Framework for Simplified Deployment, Monitoring, and Optimization of ML Systems in Production}, 
+      author={Armen Kasparian and Kishansingh Rajput and Malachi Schram and John Vennekate},
+      year={2026},
+      eprint={2607.02731},
+      archivePrefix={arXiv},
+      primaryClass={cs.SE},
+      url={https://arxiv.org/abs/2607.02731}, 
+}
+```
+
 ## Contacts
 
 If you have any questions or concerns please contact Malachi Schram (schram@jlab.org), Kishan Rajput (kishan@jlab.org), Armen Kasparian (armenk@jlab.org).
