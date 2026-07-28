@@ -1046,9 +1046,9 @@ class AutoencoderAgent(AgentBase):
 def main():
     """Main entry point for autoencoder agent."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--agent_config_key", help="Key for agent configuration dict in the config file", type=str, default='autoencoder1')
+    parser.add_argument("--agent_config", help="Key for agent configuration dict in the config file", type=str, default='autoencoder1')
     args = parser.parse_args()
-    config_key = args.agent_config_key
+    config_key = args.agent_config
 
     setup_logging()
     
