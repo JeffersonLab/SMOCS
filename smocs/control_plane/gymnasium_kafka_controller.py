@@ -62,6 +62,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         self.default_action_strategy = self.gym_config['default_action_strategy']
         self.step_delay = self.gym_config['step_delay']
         self.reset_on_start = self.gym_config['reset_on_start']
+        self.env_kwargs = self.gym_config.get('env_kwargs', {})
         
         # Initialize streaming processor to listen to input topic
         super().__init__(kafka_broker_url, group_id, [input_topic])
@@ -101,12 +102,12 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             env_name = self.gym_config['environment']
             render_mode = self.gym_config['render_mode']
             max_episode_steps = self.gym_config['max_episode_steps']
-            
-            # Create environment with optional render mode
-            env_kwargs = {}
+
+            # Start with env_kwargs from config, then add render_mode if specified
+            env_kwargs = dict(self.env_kwargs)
             if render_mode:
                 env_kwargs['render_mode'] = render_mode
-            
+
             env = gym.make(env_name, **env_kwargs)
             
             # Set max episode steps if specified
@@ -178,13 +179,16 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                     action = np.array(action, dtype=np.float32)
                 elif action.dtype != np.float32:
                     action = action.astype(np.float32)
-            
+
             # Validate action is in action space
             if not self.env.action_space.contains(action):
                 logging.warning(f"Action {action} not in action space {self.env.action_space}")
+                logging.warning("Action validation failed — using default action (zero/NOOP) instead. "
+                                "Ensure all parameters are within bounds and use the channels format: "
+                                '{"channels": {"action": [...]}, "timestamp": ...}')
                 # Use default action instead
                 return self.get_default_action()
-            
+
             return action
             
         except json.JSONDecodeError as e:
@@ -283,26 +287,38 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         def flatten_array_with_shape(arr, prefix):
             """
             Flatten an array and return both flattened fields and shape info.
-            
+
+            Handles:
+            - Dicts (e.g. Dict observation spaces): recursively flattens each key
+            - Lists/arrays: flattens to indexed fields with shape and stats
+            - Scalars: stores directly
+
             Args:
-                arr: Array to flatten (list or scalar)
+                arr: Array to flatten (dict, list, or scalar)
                 prefix: Field prefix (e.g., 'state', 'action')
-                
+
             Returns:
                 dict: Flattened fields and shape information
             """
             converted = self.convert_for_json(arr)
             fields = {}
-            
-            if isinstance(converted, list):
+
+            if isinstance(converted, dict):
+                # Dict observation (e.g. WaveGeneratorEnv's {"signal": [...], "condition": [...]})
+                # Recursively flatten each key, using key name in the prefix
+                for key, val in converted.items():
+                    sub_fields = flatten_array_with_shape(val, f"{prefix}_{key}")
+                    fields.update(sub_fields)
+
+            elif isinstance(converted, list):
                 # Multi-dimensional: flatten to indexed fields
                 for i, val in enumerate(converted):
                     fields[f"{prefix}_{i}"] = float(val) if isinstance(val, (int, float)) else val
-                
+
                 # Add shape information
                 fields[f"{prefix}_shape"] = len(converted)
                 fields[f"{prefix}_is_array"] = True
-                
+
                 # Add summary statistics for numeric arrays
                 if all(isinstance(x, (int, float)) for x in converted):
                     numeric_vals = [float(x) for x in converted]
@@ -315,7 +331,7 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                 fields[prefix] = float(converted) if isinstance(converted, (int, float)) else converted
                 fields[f"{prefix}_shape"] = 1
                 fields[f"{prefix}_is_array"] = False
-            
+
             return fields
         
         # Create channels dictionary with all gymnasium data
@@ -447,10 +463,12 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             )
             
             logging.info(f"[GYM-STEP] Created SARSA tuple:")
-            logging.info(f"  State St (step {self.total_steps - 1}): {current_state[:3]}...")
+            state_preview = current_state if isinstance(current_state, dict) else current_state[:3]
+            next_state_preview = next_obs if isinstance(next_obs, dict) else next_obs[:3]
+            logging.info(f"  State St (step {self.total_steps - 1}): {state_preview}")
             logging.info(f"  Action At: {action}")
             logging.info(f"  Reward Rt: {reward:.3f}")
-            logging.info(f"  Next_state St+1 (step {self.total_steps}): {next_obs[:3]}...")
+            logging.info(f"  Next_state St+1 (step {self.total_steps}): {next_state_preview}")
             logging.info(f"  Done: {done or truncated}")
             
             # Handle episode end vs. continuation differently

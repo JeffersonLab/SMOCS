@@ -33,21 +33,37 @@ epics:
       
 gymnasium:
   # Environment settings
-  environment: "Pendulum-v1"
+  environment: "WaveGenerator-v0"
   render_mode: null  # Options: null, 'human', 'rgb_array'
   max_episode_steps: null  # null uses environment default
-  
+
+  # Environment constructor kwargs (passed to gym.make via env_kwargs)
+  env_kwargs:
+    reference_period: 100
+    default_wave_type: 0      # 0=Sine
+    default_amplitude: 5.0
+    default_frequency: 3
+    default_drift: 0.0
+    default_noise_level: 0.5
+    auto_anomaly_enabled: true
+    auto_anomaly_p_per_step: 0.01   # ~1 anomaly per 100 steps
+    auto_anomaly_cooldown: 100
+    auto_anomaly_dur_min: 20
+    auto_anomaly_dur_max: 100
+    auto_anomaly_mag_min: 1.5
+    auto_anomaly_mag_max: 5.0
+
   # Kafka topics
   input_topic: "gymnasium-action"
   output_topics:
     sarsa: "gymnasium-sarsa"
     state: "gymnasium-state"
     decomposed: "gymnasium-output"
-  
+
   # Operation mode
   blocking_mode: false  # true = wait for Kafka actions, false = use default actions
-  default_action_strategy: "random"  # Options: 'random', 'zero'
-  step_delay: 0.0  # Delay in seconds between steps
+  default_action_strategy: "zero"  # Options: 'random', 'zero'
+  step_delay: 0.1  # Delay in seconds between steps (10 steps/sec)
   reset_on_start: true  # Reset environment on startup
 
 kafka:
@@ -59,9 +75,9 @@ autoencoder_agent1:
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  window_size: 5
+  window_size: 10
   min_training_samples: 100
-  encoder_dims: [64, 32, 16]
+  encoder_dims: [32, 16]
   learning_rate: 0.0001
   batch_size: 16
   samples_multiplier: 3
@@ -69,34 +85,27 @@ autoencoder_agent1:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-      - IGLK100HVPSkVolts
-      - ITFHALLAMODE
-      - ITFFCupK6485correctedCur.VAL
-      
-      bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
-      - [10.0, 200.0]
-      - [0.0, 5.0]
-      - [0.0, 65.0]
+      - state_signal_0
+      - state_condition_1
+      - state_condition_2
+      - state_condition_3
 
-      switch: # By default switch follows "AND" operation; #TODO: Define AND, OR combination logic
-        IGLK100HVPSkVolts: 
-          greater_than: 10.0
-        ITFHALLAMODE:
-          greater_than: 0.0 
-        ITFFCupK6485correctedCur.VAL:
-          greater_than: 0.0
-      
+      bounds:
+      - [-100.0, 100.0]   # state_signal_0: wave sample value
+      - [1.0, 20.0]       # state_condition_1: amplitude
+      - [1.0, 20.0]       # state_condition_2: frequency
+      - [-20.0, 20.0]     # state_condition_3: drift
+
+      switch:
+        state_signal_0:
+          greater_than: -1000.0
+
   model_output:
       channels:
-      - IPMK101.XPOS
-      - IPMK101.YPOS
+      - state_signal_0
 
   kafka_topics:
-    input: "CEBAF"
+    input: "gymnasium-output"
     output: "autoencoder1-anomalies"
     training_output: "autoencoder1-training-results"
 
