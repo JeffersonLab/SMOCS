@@ -14,12 +14,13 @@ CREATE TABLE IF NOT EXISTS agent_information (
 );
 
 CREATE TABLE IF NOT EXISTS agent_inferences (
-    id INT AUTO_INCREMENT PRIMARY KEY, 
-    state_source_timestamp DATETIME(6) NOT NULL, 
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    state_source_timestamp DATETIME(6) NOT NULL,
     state_received_timestamp DATETIME(6) NOT NULL,
-    state BLOB NOT NULL, 
-    prediction_timestamp DATETIME(6), 
-    prediction BLOB
+    state BLOB NOT NULL,
+    prediction_timestamp DATETIME(6),
+    prediction BLOB,
+    block_id INT NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS agent_replay (

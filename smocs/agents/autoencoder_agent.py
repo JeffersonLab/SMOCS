@@ -14,6 +14,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
+from smocs.db.mysql_api_v0 import DBManager
 from smocs.utils import ConfigLoader, ChannelFilter, setup_logging
 from smocs.preprocessing import PreprocessingManager
 
@@ -22,7 +23,40 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
     Data ingestion thread for autoencoder agent.
     Stores raw time series sensor data to database.
     """
-    
+
+    def _build_sensor_payload(self, channels: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Constructs the (state_array, extra_columns) pair to be written to the database
+        from a single dictionary of filtered channel values.
+
+        This hook exists so that subclasses may alter how the state array and any
+        additional, separately-stored columns are derived from the same underlying
+        channel values, without having to duplicate the surrounding timestamp
+        construction, switch check, and database-write logic in store_message() below.
+
+        In this base implementation, appropriate for an agent with no notion of
+        context, every channel value is placed into the state array, in the order
+        supplied, and no additional columns are produced.
+
+        ContextualAutoencoderDataIngestThread overrides this method to instead
+        partition the incoming channel values: the input channels are placed into the
+        state array, exactly as here, while the context channels are extracted into
+        extra_columns, to be written as their own separate, individually named
+        database columns rather than being embedded within the state array.
+
+        Args:
+            channels: An ordered mapping from channel name to its filtered numeric
+                value, as produced upstream by ChannelFilter.
+
+        Returns:
+            tuple: A two-element tuple of (state_array, extra_columns), where
+                state_array is a numpy array of the values to be stored under the
+                'state' column, and extra_columns is a dictionary of any additional
+                column name/value pairs to be merged into the row prior to insertion.
+        """
+        sensor_values = np.array(list(channels.values()), dtype=np.float32)
+        return sensor_values, {}
+
     def store_message(self, message_data, topic, partition, offset) -> bool:
         """
         Parse sensor message and store raw data to database.
@@ -34,23 +68,18 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                 timestamp = datetime.fromtimestamp(message_data['timestamp'])
             else:
                 timestamp = datetime.now()
-            
             # Get filtered channels (already processed by base class)
             channels = message_data.get('channels', {})
-            
             if not channels:
                 logging.error("AEDataIngestThread: No channels in filtered message data")
                 return False
-            
-            # Convert channel values directly to numpy array (maintains order)
-            channel_values = list(channels.values())
-            sensor_values = np.array(channel_values, dtype=np.float32)
-            
+            sensor_values, extra_columns = self._build_sensor_payload(channels)
             # Store RAW data in database (no preprocessing here)
             sensor_data = {
                 'state_source_timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S.%f'),
                 'state_received_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-                'state': sensor_values  # Raw data - preprocessing happens during training
+                'state': sensor_values,  # Raw data - preprocessing happens during training
+                **extra_columns,
             }
 
             if not self.switch_fn(channels):
@@ -1032,7 +1061,35 @@ class AutoencoderAgent(AgentBase):
 
         logging.info(f"AEAgent: AutoencoderAgent initialized with config: {self.agent_config}")
         logging.info(f"AEAgent: Enabled threads: {self.enabled_threads}")
-    
+
+    def _ensure_sensor_schema(self):
+        """
+        Overrides AgentBase._ensure_sensor_schema to ensure that agent_inferences
+        already has every column this agent's context_cols requires before any of
+        the ingest, training, or inference threads are constructed - see that
+        method's docstring for why this must happen here, exactly once, rather than
+        being left to each thread's own connection.
+
+        A short-lived DBManager, configured with this agent's actual context_cols
+        and max_gap_seconds - built the same way each thread's own
+        _setup_db_connection independently builds its db_config - is opened solely
+        to run create_tables() and is closed immediately afterward; it is not
+        retained or reused for anything beyond this one migration step.
+        """
+        model_input = self.agent_config.get('model_input', {})
+        db_config = {
+            'agent_id': self.agent_id,
+            'host': os.environ.get('MYSQL_HOST', 'localhost'),
+            'port': int(os.environ.get('MYSQL_PORT', 3307)),
+            'user': os.environ.get('MYSQL_USER', 'root'),
+            'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
+            'context_cols': model_input.get('context_channels', []),
+            'max_gap_seconds': self.agent_config.get('max_gap_seconds', float('inf')),
+        }
+        db_manager = DBManager(db_config)
+        db_manager.create_tables()
+        db_manager.close()
+
     def create_data_ingest_component(self):
         """Create data ingestion thread component."""
         if 'ingest' in self.enabled_threads:

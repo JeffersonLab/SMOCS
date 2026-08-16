@@ -61,9 +61,23 @@ def _parse_context_atol(raw_tol, n_context_channels: int) -> np.ndarray:
 
 class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
     """
-    Extends the plain AE ingest thread so that both input channels and context
-    channels are written into the state blob.  Everything else (switch check,
-    DB write) is inherited unchanged.
+    Extends the plain autoencoder ingest thread so that a single incoming Kafka
+    message yields both the input channel values and the context channel values in
+    one filtered pass, while ensuring that the two groups are subsequently written
+    to the database as distinct, separately-typed entities rather than being merged
+    together.
+
+    Specifically: the input channel values continue to be written into the state
+    column, in the same array shape and with the same semantics as in the plain
+    autoencoder agent, so that downstream preprocessing of the input signal is
+    unaffected by the presence of context. The context channel values, in contrast,
+    are written into their own individually named database columns, via the
+    _build_sensor_payload override defined below, so that DBManager is able to
+    query, group, and stratify sampling by those values directly at the database
+    layer, rather than needing to decode them out of an opaque state blob.
+
+    All other behavior - the switch-function check, timestamp construction, and the
+    database write itself - is inherited unchanged from AutoencoderDataIngestThread.
     """
 
     def __init__(self, agent_id: str, config: Dict[str, Any]):
@@ -73,12 +87,45 @@ class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
         model_input = config.get('model_input', {})
         input_channels = model_input.get('channels', [])
         context_channels = model_input.get('context_channels', [])
+        self.n_input_channels = len(input_channels)
+        self.context_channels = context_channels
         if input_channels and context_channels:
             self.channel_filter = ChannelFilter(input_channels + context_channels)
             logging.info(
                 f"CAEDataIngestThread: channel filter rebuilt — "
                 f"{len(input_channels)} input + {len(context_channels)} context channels"
             )
+
+    def _build_sensor_payload(self, channels: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Overrides AutoencoderDataIngestThread._build_sensor_payload to partition the
+        filtered channel values into their input and context constituents, rather
+        than placing all of them into the state array unmodified.
+
+        The channel_filter constructed in __init__, above, was rebuilt to enumerate
+        input_channels followed by context_channels, in that fixed order; the values
+        supplied here therefore arrive in that same order, which is what permits the
+        positional slice below to separate the two groups correctly. The first
+        n_input_channels values become the state array, exactly as in the base
+        class. The remaining values are paired with their corresponding names from
+        context_channels to form extra_columns, keyed by channel name so that they
+        align, one-to-one, with the context_cols configured on DBManager (which is
+        itself populated from the identical model_input.context_channels
+        configuration entry).
+
+        Args:
+            channels: An ordered mapping from channel name to its filtered numeric
+                value, containing both input and context channels together.
+
+        Returns:
+            tuple: A two-element tuple of (state, extra_columns), where state
+                contains only the input channel values, and extra_columns maps each
+                context channel's name to its value.
+        """
+        values = list(channels.values())
+        state = np.array(values[:self.n_input_channels], dtype=np.float32)
+        extra_columns = dict(zip(self.context_channels, values[self.n_input_channels:]))
+        return state, extra_columns
 
 
 # ---------------------------------------------------------------------------
@@ -89,11 +136,22 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
     """
     Extends the plain AE training thread with a context-conditioned architecture.
 
-    The state blob stored by the ingest thread contains
-        [input_channels | context_channels]
-    in that order.  get_training_data() returns a single numpy array with the
-    same layout so that training_loop()'s .shape access does not break;
-    train_model() / eval_model() split it at the input_split index.
+    The 'state' array returned within sample_batch's result contains input channel
+    values exclusively, in the same shape and with the same meaning as in the plain
+    autoencoder agent. Context channel values are, by contrast, stored and sampled as
+    their own individually named database columns, one per entry configured in
+    model_input.context_channels, rather than being embedded within 'state'.
+    get_training_data(), below, reconstitutes those separately-stored columns into a
+    single array of shape (batch, window, n_context) by stacking them, in the fixed
+    order given by context_channels, along a new trailing axis.
+
+    get_training_data() ultimately returns one combined numpy array, formed by
+    concatenating the preprocessed input windows with the preprocessed context
+    windows, so that the shape-inspection logic in the inherited training_loop()
+    continues to operate correctly without modification. train_model() and
+    eval_model(), further below, subsequently split this combined array back into
+    its constituent input and context portions at the index computed by
+    _input_split().
     """
 
     def __init__(self, agent_id: str, config: Dict[str, Any]):
@@ -103,7 +161,8 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         # self.n_context_channels, so if self.n_context_channels is not set before
         # super().__init__(), that would be too late.
         self.n_input_channels = len(model_input.get('channels', []))
-        self.n_context_channels = len(model_input.get('context_channels', []))
+        self.context_channels = model_input.get('context_channels', [])
+        self.n_context_channels = len(self.context_channels)
         self.context_dim = None
 
         super().__init__(agent_id, config)  # sets window_size/encoder_dims/etc., creates preprocessing_manager (input channels only), and calls load_existing_model()
@@ -240,7 +299,8 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
                 batch_size=self.batch_size * self.samples_multiplier,
                 segment_length=self.window_size,
                 agent_type="diagnostics",
-                mode="latest",
+                mode="stratified",
+                stratified_groups="all",
             )
 
             logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
@@ -251,10 +311,15 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
             logging.info("CAEMLTrainingThread: Starting preprocessing pipeline...")
 
-            # states: (batch, window_size, n_input + n_context)
-            states = batch_data['state']
-            input_states = states[:, :, :self.n_input_channels]
-            context_states = states[:, :, self.n_input_channels:]
+            # 'state' contains input channel values exclusively, with shape
+            # (batch, window_size, n_input); it does not include context. Because
+            # context channel values were instead stored and sampled as separate,
+            # individually named database columns, they must be reassembled here into
+            # a single array of shape (batch, window_size, n_context) by stacking each
+            # named column, in the fixed order given by self.context_channels, along a
+            # new trailing axis.
+            input_states = batch_data['state']
+            context_states = np.stack([batch_data[c] for c in self.context_channels], axis=-1)
 
             input_windows = self.preprocessing_manager.execute_pipeline(input_states)
             context_windows = self.context_preprocessing_manager.execute_pipeline(context_states)
