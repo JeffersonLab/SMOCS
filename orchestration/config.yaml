@@ -144,7 +144,7 @@ contextual_autoencoder_agent1:
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  window_size: 5
+  window_size: 10
   min_training_samples: 100
   encoder_dims: [64, 32, 16]
   learning_rate: 0.0001
@@ -156,22 +156,33 @@ contextual_autoencoder_agent1:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
     channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
+      - state_signal_0   # WaveGeneratorEnv 'signal' — the wave sample to reconstruct
     bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
+      - [-100.0, 100.0]
     context_channels:
-      - IGLK100HVPSkVolts
+      # WaveGeneratorEnv 'condition' (declared, not actual) — the intended shape of
+      # the wave. Auto-injected anomalies perturb the actual signal without moving
+      # these, so a mismatch here means a genuine reconfiguration (context_drift),
+      # while an unexplained mismatch in state_signal_0 means a real anomaly.
+      - state_condition_0   # wave_type: 0=sine, 1=square, 2=sawtooth, 3=triangle
+      - state_condition_1   # amplitude
+      - state_condition_2   # frequency
+      - state_condition_3   # drift
     context_bounds:
-      - [-1.0, 1.0]
-    context_tolerance: 0.05  # test-data units — scalar applies to all context channels
+      - [0.0, 3.0]
+      - [1.0, 20.0]
+      - [1.0, 20.0]
+      - [-20.0, 20.0]
+    # Declared condition values only change on an explicit CONFIGURE/RESET_WITH_PARAMS
+    # command (see WaveGeneratorEnv._apply_wave_config) — no per-step sensor noise like
+    # a real PV readback — so an exact-equality-ish tolerance is appropriate. 1e-6 rather
+    # than literal 0 as a defensive margin against float round-trip precision changes.
+    context_tolerance: 1e-6
   model_output:
     channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
+      - state_signal_0
   kafka_topics:
-    input: "CEBAF"
+    input: "gymnasium-output"
     output: "cae1-anomalies"
     training_output: "cae1-training-results"
 

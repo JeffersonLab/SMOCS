@@ -144,7 +144,7 @@ services:
       MYSQL_HOST: ${MYSQL_HOST}  
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      #MYSQL_DATABASE: ${MYSQL_DATABASE}    # Commenting to enable _setup_db_connection in agent_base to set it to its default value of "agentdb" which is hardcoded in init.sql. Will eventually be completely removed since there is no need to set a configurable database name for the agent. The agent will always use "agentdb" as the database name.
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CONFIG_PATH: /app/config.yaml
       PYTHONPATH: /app
