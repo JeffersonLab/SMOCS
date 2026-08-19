@@ -273,7 +273,12 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
     def get_training_data(self) -> Optional[np.ndarray]:
         """
-        Retrieve raw training data from database and apply preprocessing pipeline.
+        Retrieve raw training data from database and apply preprocessing pipeline,
+        but only if new data has arrived since the last successful training round
+        (see the total_samples <= self.last_training_count check, below). This
+        gate exists specifically to stop training_loop() from retraining on data
+        it has already trained on; eval_model() deliberately does not go through
+        this method for that reason - see _fetch_and_preprocess_batch's docstring.
 
         Returns:
             Combined array of shape (n_windows, window_size*(n_input+n_context)),
@@ -295,54 +300,83 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
             logging.info(f"CAEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
 
-            batch_data = self.db_manager.sample_batch(
-                batch_size=self.batch_size * self.samples_multiplier,
-                segment_length=self.window_size,
-                agent_type="diagnostics",
-                mode="stratified",
-                stratified_groups="all",
-            )
-
-            logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
-
-            if batch_data is None or len(batch_data['state']) == 0:
-                logging.warning("CAEMLTrainingThread: No batch data returned from database")
+            combined = self._fetch_and_preprocess_batch()
+            if combined is None:
                 return None
-
-            logging.info("CAEMLTrainingThread: Starting preprocessing pipeline...")
-
-            # 'state' contains input channel values exclusively, with shape
-            # (batch, window_size, n_input); it does not include context. Because
-            # context channel values were instead stored and sampled as separate,
-            # individually named database columns, they must be reassembled here into
-            # a single array of shape (batch, window_size, n_context) by stacking each
-            # named column, in the fixed order given by self.context_channels, along a
-            # new trailing axis.
-            input_states = batch_data['state']
-            context_states = np.stack([batch_data[c] for c in self.context_channels], axis=-1)
-
-            input_windows = self.preprocessing_manager.execute_pipeline(input_states)
-            context_windows = self.context_preprocessing_manager.execute_pipeline(context_states)
-
-            if input_windows is None or len(input_windows) == 0:
-                logging.error("CAEMLTrainingThread: No valid windows created by preprocessing pipeline")
-                return None
-
-            combined = np.concatenate([input_windows, context_windows], axis=1)
-
-            logging.info(f"CAEMLTrainingThread: Final combined windowed data shape: {combined.shape}")
-            logging.debug(f"CAEMLTrainingThread: Data range: [{np.min(combined):.6f}, {np.max(combined):.6f}]")
-            logging.debug(f"CAEMLTrainingThread: Data mean: {np.mean(combined):.6f}")
-            logging.debug(f"CAEMLTrainingThread: Data std: {np.std(combined):.6f}")
 
             self.last_training_count = total_samples
 
-            logging.info(f"CAEMLTrainingThread: Successfully prepared {len(combined)} training windows using preprocessing pipeline")
             return combined
 
         except Exception as e:
             logging.error(f"CAEMLTrainingThread: Error getting training data: {e}")
             return None
+
+    def _fetch_and_preprocess_batch(self) -> Optional[np.ndarray]:
+        """
+        Samples one batch of windows from the database and runs the input and
+        context channels each through their own preprocessing pipeline, with
+        no gating on whether the data is "new."
+
+        This is used by both get_training_data(), above, which applies that
+        "new since last training" gate itself before calling here, and by
+        eval_model(), which deliberately calls this directly instead of going
+        through get_training_data(). eval_model() only needs some current data
+        to score the model against, not specifically unseen data - if it went
+        through get_training_data() instead, it would be racing the very
+        training_loop() call that just ran moments earlier and already bumped
+        last_training_count to the current total_samples, so it would return
+        None unless a brand new row happened to arrive in that narrow window.
+        That was a real, previously-observed bug: it caused eval to fail on
+        roughly half of all training cycles, each such failure leaving that
+        model version's saved metadata without an anomaly_threshold_95 value.
+
+        Returns:
+            Combined array of shape (n_windows, window_size*(n_input+n_context)),
+            or None if no batch data or no valid windows were available.
+        """
+        batch_data = self.db_manager.sample_batch(
+            batch_size=self.batch_size * self.samples_multiplier,
+            window_size=self.window_size,
+            agent_type="diagnostics",
+            sampling_lookback=self.sampling_lookback,
+            sampling_strategy=self.sampling_strategy,
+        )
+
+        logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
+
+        if batch_data is None or len(batch_data['state']) == 0:
+            logging.warning("CAEMLTrainingThread: No batch data returned from database")
+            return None
+
+        logging.info("CAEMLTrainingThread: Starting preprocessing pipeline...")
+
+        # 'state' contains input channel values exclusively, with shape
+        # (batch, window_size, n_input); it does not include context. Because
+        # context channel values were instead stored and sampled as separate,
+        # individually named database columns, they must be reassembled here into
+        # a single array of shape (batch, window_size, n_context) by stacking each
+        # named column, in the fixed order given by self.context_channels, along a
+        # new trailing axis.
+        input_states = batch_data['state']
+        context_states = np.stack([batch_data[c] for c in self.context_channels], axis=-1)
+
+        input_flattened_windows = self.preprocessing_manager.execute_pipeline(input_states)
+        context_flattened_windows = self.context_preprocessing_manager.execute_pipeline(context_states)
+
+        if input_flattened_windows is None or len(input_flattened_windows) == 0:
+            logging.error("CAEMLTrainingThread: No valid windows created by preprocessing pipeline")
+            return None
+
+        combined = np.concatenate([input_flattened_windows, context_flattened_windows], axis=1)
+
+        logging.info(f"CAEMLTrainingThread: Final combined flattened windows shape: {combined.shape}")
+        logging.debug(f"CAEMLTrainingThread: Data range: [{np.min(combined):.6f}, {np.max(combined):.6f}]")
+        logging.debug(f"CAEMLTrainingThread: Data mean: {np.mean(combined):.6f}")
+        logging.debug(f"CAEMLTrainingThread: Data std: {np.std(combined):.6f}")
+
+        logging.info(f"CAEMLTrainingThread: Successfully prepared {len(combined)} training windows using preprocessing pipeline")
+        return combined
 
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
         """
@@ -397,6 +431,12 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         """
         Evaluate the trained model.
 
+        Calls _fetch_and_preprocess_batch() directly rather than get_training_data(),
+        since evaluation only needs some current data to score the model against, not
+        specifically data unseen since the last training round - see
+        _fetch_and_preprocess_batch's docstring for why going through
+        get_training_data() here would be a bug, not just a stylistic difference.
+
         Returns:
             Dict of evaluation metrics, or dict with 'error' key on failure.
         """
@@ -404,7 +444,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             if self.model is None:
                 return {'error': 'No model to evaluate'}
 
-            combined = self.get_training_data()
+            combined = self._fetch_and_preprocess_batch()
             if combined is None:
                 return {'error': 'No evaluation data available'}
 
@@ -553,10 +593,10 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             try:
                 # Add batch dimension, preprocess → (1, T*n_channels)
-                input_window = self.preprocessing_manager.execute_pipeline(
+                input_flattened_windows = self.preprocessing_manager.execute_pipeline(
                     [input_window_raw]
                 )
-                context_window = self.context_preprocessing_manager.execute_pipeline(
+                context_flattened_windows = self.context_preprocessing_manager.execute_pipeline(
                     [context_window_raw]
                 )
             except Exception as pipeline_error:
@@ -565,7 +605,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             # Model reconstructs input channels only; context is conditioning only
             reconstruction_normalized = self.model.predict(
-                [input_window, context_window], verbose=0
+                [input_flattened_windows, context_flattened_windows], verbose=0
             )   # (1, T*n_input)
 
             # Denormalize reconstruction to original units (post-processing)
@@ -585,7 +625,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             # Compute reconstruction error on preprocessed data
             error_score = float(
-                np.mean((input_window - reconstruction_normalized) ** 2)
+                np.mean((input_flattened_windows - reconstruction_normalized) ** 2)
             )
             is_anomaly = (
                 bool(error_score > self.anomaly_threshold)
@@ -626,7 +666,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             return {
                 'reconstruction_normalized': reconstruction_normalized.flatten(),
                 'reconstruction_original': reconstruction_original.flatten(),
-                'original_window_normalized': input_window.flatten(),
+                'original_window_normalized': input_flattened_windows.flatten(),
                 'error_score': error_score,
                 'is_anomaly': is_anomaly,
                 'is_drift': is_drift,

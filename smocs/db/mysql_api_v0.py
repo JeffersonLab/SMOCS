@@ -11,7 +11,8 @@ import logging
 import decimal
 import time
 import pickle
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 class DBManager:
 
@@ -33,14 +34,14 @@ class DBManager:
     # Function to connect with db
     def __init__(self, db_cfg_dict):
         """
-        Initializes the DBConnector by loading the database configuration from a YAML file 
+        Initializes the DBConnector by loading the database configuration from a YAML file
         and establishing a connection to the MySQL database.
 
         Args:
             db_cfg_filepath (str): The path of the YAML configuration file containing the database connection details.
 
         Raises:
-            Exception: If there is an error connecting to the MySQL database, the exception is raised 
+            Exception: If there is an error connecting to the MySQL database, the exception is raised
                     and the process is terminated.
 
         Attributes:
@@ -93,7 +94,7 @@ class DBManager:
             bool: True if the connection is established, False otherwise.
         """
         return self.mydb.is_connected()
-        
+
     def __execute_and_commit(self, query, values=None):
         """
         Executes a SQL query and commits the changes to the database.
@@ -120,9 +121,9 @@ class DBManager:
             logging.debug("DB Error: ", e)
             logging.debug("with query: ", query)
             raise e
-        
+
         return status
-    
+
     def __execute_query(self, query, values=None):
         """
         Executes a SQL query and returns the results.
@@ -149,7 +150,7 @@ class DBManager:
             logging.debug("DB Error: ", e)
             logging.debug("with query: ", query)
             raise e
-        
+
         return results
 
     def connect(self, db_config, n_connection_trials=5):
@@ -216,11 +217,11 @@ class DBManager:
         self.__execute_and_commit(query)
 
         query = """
-        CREATE TABLE IF NOT EXISTS agent_inferences (id INT AUTO_INCREMENT PRIMARY KEY, 
-                                                                state_source_timestamp DATETIME(6) NOT NULL, 
+        CREATE TABLE IF NOT EXISTS agent_inferences (id INT AUTO_INCREMENT PRIMARY KEY,
+                                                                state_source_timestamp DATETIME(6) NOT NULL,
                                                                 state_received_timestamp DATETIME(6) NOT NULL,
-                                                                state BLOB NOT NULL, 
-                                                                prediction_timestamp DATETIME(6), 
+                                                                state BLOB NOT NULL,
+                                                                prediction_timestamp DATETIME(6),
                                                                 prediction BLOB,
                                                                 block_id INT NOT NULL DEFAULT 0)
         """
@@ -237,7 +238,7 @@ class DBManager:
                                                 next_state BLOB NOT NULL,
                                                 terminate BOOL NOT NULL,
                                                 truncate BOOL NOT NULL,
-                                                info, BLOB,
+                                                info BLOB,
                                                 FOREIGN KEY (state_id) REFERENCES agent_inferences(id)
                                             )
         """
@@ -251,6 +252,38 @@ class DBManager:
         # _migrate_inferences_schema's docstring, for the complete explanation of
         # this distinction.
         self._migrate_inferences_schema()
+
+        # sample_batch filters agent_inferences directly on state_source_timestamp
+        # (the sampling_lookback window) and on block_id (per-block stratification)
+        # on every call, so both columns are indexed here to keep those lookups fast
+        # as the table grows over the agent's lifetime, rather than requiring a full
+        # table scan on every sample_batch call.
+        self._ensure_index("agent_inferences", "state_source_timestamp", "idx_state_source_timestamp")
+        self._ensure_index("agent_inferences", "block_id", "idx_block_id")
+
+    def _ensure_index(self, table_name, column_name, index_name):
+        """
+        Ensures that a plain, non-unique index named index_name exists on
+        table_name(column_name), creating it if it does not already exist.
+
+        As with _get_existing_columns, above, idempotency here is achieved by
+        first querying INFORMATION_SCHEMA (specifically, INFORMATION_SCHEMA.STATISTICS,
+        MySQL's metadata table describing every index defined on every table) rather
+        than relying on "CREATE INDEX IF NOT EXISTS" syntax, since that syntax's
+        availability differs across MySQL versions.
+
+        Args:
+            table_name (str): The table the index is to be created on.
+            column_name (str): The single column the index is to cover.
+            index_name (str): The name to give the index.
+        """
+        query = ("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.STATISTICS "
+                 "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND INDEX_NAME = %s")
+        self.db_cursor.execute(query, (self.mydb.database, table_name, index_name))
+        already_exists = self.db_cursor.fetchone()['cnt'] > 0
+        if not already_exists:
+            logging.info(f"DBManager: adding index {index_name} on {table_name}({column_name})")
+            self.__execute_and_commit(f"CREATE INDEX `{index_name}` ON {table_name} (`{column_name}`)")
 
     def _get_existing_columns(self, table_name):
         """
@@ -447,16 +480,16 @@ class DBManager:
     def register_agent(self, agent_id, agent_name, config=None, info=None):
         """
         Register an agent in the database.
-        
+
         Args:
             agent_id (str): The unique identifier for the agent
             agent_name (str): The name of the agent
             config (dict, optional): Configuration dictionary for the agent. Defaults to empty dict.
             info (dict, optional): Additional information dictionary for the agent. Defaults to empty dict.
-            
+
         Returns:
             int: Status code (0 for success, 1 for error)
-            
+
         Raises:
             Exception: If there is an error executing the database query
         """
@@ -469,10 +502,10 @@ class DBManager:
                     'startup_time': time.time(),
                     'status': 'starting'
                 }
-            
+
             # Prepare the data for insertion
-            query = """INSERT INTO agent_information 
-                      (registered_id, agent_name, config, info) 
+            query = """INSERT INTO agent_information
+                      (registered_id, agent_name, config, info)
                       VALUES (%s, %s, %s, %s)"""
             values = (
                 agent_id,
@@ -480,16 +513,16 @@ class DBManager:
                 pickle.dumps(config),
                 pickle.dumps(info)
             )
-            
+
             status = self.__execute_and_commit(query, values)
-            
+
             if status == 0:
                 logging.info(f"Agent {agent_id} ({agent_name}) registered successfully in database")
             else:
                 logging.error(f"Failed to register agent {agent_id} in database")
-                
+
             return status
-            
+
         except Exception as e:
             logging.error(f"Error registering agent {agent_id}: {e}")
             raise e
@@ -497,11 +530,11 @@ class DBManager:
     def update_agent_info(self, agent_id, info_updates):
         """
         Update agent information in the database.
-        
+
         Args:
             agent_id (str): The unique identifier for the agent
             info_updates (dict): Dictionary containing the updates to merge with existing info
-            
+
         Returns:
             int: Status code (0 for success, 1 for error)
         """
@@ -510,30 +543,30 @@ class DBManager:
             query = "SELECT info FROM agent_information WHERE registered_id = %s"
             self.db_cursor.execute(query, (agent_id,))
             results = self.db_cursor.fetchall()
-            
+
             if not results:
                 logging.error(f"Agent {agent_id} not found in database")
                 return 1
-            
+
             # Deserialize existing info
             existing_info = pickle.loads(results[0]['info']) if results[0]['info'] else {}
-            
+
             # Merge with updates
             existing_info.update(info_updates)
-            
+
             # Update the database
             update_query = "UPDATE agent_information SET info = %s WHERE registered_id = %s"
             values = (pickle.dumps(existing_info), agent_id)
-            
+
             status = self.__execute_and_commit(update_query, values)
-            
+
             if status == 0:
                 logging.info(f"Agent {agent_id} info updated successfully")
             else:
                 logging.error(f"Failed to update agent {agent_id} info")
-                
+
             return status
-            
+
         except Exception as e:
             logging.error(f"Error updating agent {agent_id} info: {e}")
             raise e
@@ -541,10 +574,10 @@ class DBManager:
     def get_agent_info(self, agent_id):
         """
         Retrieve agent information from the database.
-        
+
         Args:
             agent_id (str): The unique identifier for the agent
-            
+
         Returns:
             dict: Agent information including config and info, or None if not found
         """
@@ -552,11 +585,11 @@ class DBManager:
             query = "SELECT * FROM agent_information WHERE registered_id = %s"
             self.db_cursor.execute(query, (agent_id,))
             result = self.db_cursor.fetchone()
-            
+
             if not result:
                 logging.warning(f"Agent {agent_id} not found in database")
                 return None
-            
+
             # Deserialize pickled data
             agent_info = {
                 'id': result['id'],
@@ -565,9 +598,9 @@ class DBManager:
                 'config': pickle.loads(result['config']) if result['config'] else {},
                 'info': pickle.loads(result['info']) if result['info'] else {}
             }
-            
+
             return agent_info
-            
+
         except Exception as e:
             logging.error(f"Error retrieving agent {agent_id} info: {e}")
             raise e
@@ -583,7 +616,7 @@ class DBManager:
         Raises:
             None: If the results are empty or if there are no decimal.Decimal or bytes types in the results, it simply returns an empty numpy array.
         Example:
-            >>> results = [{'id': 1, 'value': decimal.Decimal('3.14'), 'data': b'\x00\x01\x02\x03'}]
+            >>> results = [{'id': 1, 'value': decimal.Decimal('3.14'), 'data': b'\\x00\\x01\\x02\\x03'}]
             >>> parsed_results = self.parse_results(results)
             >>> logging.debug(parsed_results)
             [{'id': 1, 'value': 3.14, 'data': array([0., 1., 2., 3.])}]
@@ -601,30 +634,34 @@ class DBManager:
                             result[key] = pickle.loads(result[key])
                         except pickle.UnpicklingError:
                             logging.debug(f"Could not unpickle data for key: {key}")
-                
+
             parsed_results.append(result)
         return np.array(parsed_results)
 
-    def get_timestamps(self, window_size, mode="random", n=1, agent_type="diagnostics", context_filter=None):
+    def get_timestamps(self, window_size, mode="random", n=1, agent_type="diagnostics",
+                        equality_filter=None, min_timestamp=None):
         """
         Retrieves a list of timestamps from the database that have at least `window_size` number of records.
 
         Args:
             window_size (int): The minimum number of records required for each timestamp.
             mode (str): The order in which candidate timestamps are to be sampled,
-                either "random" or "latest". Defaults to "random". Note that this
-                parameter governs only the ordering applied within this method; it
-                is a lower-level, internal primitive employed by sample_batch's
-                stratified-sampling logic, and is distinct from, and should not be
-                confused with, sample_batch's own, higher-level mode argument.
+                either "random" or "latest". Defaults to "random". This is a
+                lower-level, internal ordering primitive used by sample_batch (by
+                way of _collect_windows_for_block); it is unrelated to
+                sample_batch's own sampling_strategy argument.
             n (int): The number of timestamps to retrieve. Defaults to 1.
             agent_type (str): The type of agent - "controls" or "diagnostics". Defaults to "diagnostics".
-            context_filter (dict, optional): A mapping from context column name to
-                the exact value that column must hold. When supplied, only
-                timestamps belonging to rows whose context_cols values match this
-                mapping exactly are considered as candidates. This parameter applies
-                to diagnostics agents only, and has no effect when agent_type is
-                "controls".
+            equality_filter (dict, optional): A mapping from column name to the
+                exact value that column must hold - for example, {"block_id": 3}.
+                When supplied, only timestamps belonging to rows matching every
+                entry in this mapping exactly are considered as candidates. This
+                parameter applies to diagnostics agents only, and has no effect
+                when agent_type is "controls".
+            min_timestamp (datetime, optional): When supplied, only timestamps at
+                or after this value are considered as candidates. This parameter
+                applies to diagnostics agents only, and has no effect when
+                agent_type is "controls".
 
         Returns:
             list: A list of dictionaries containing the timestamps that meet the criteria.
@@ -646,7 +683,7 @@ class DBManager:
                 WHERE ai2.state_source_timestamp >= ai.state_source_timestamp
             ) >= {window_size}
             """
-            
+
             if mode.lower() == "random":
                 query += " ORDER BY RAND()"
             elif mode.lower() == "latest":
@@ -654,9 +691,19 @@ class DBManager:
             else:
                 logging.debug("mode not understood in get_timestamps function...")
                 return None
-                
+
         else:  # diagnostics
-            # Diagnostic agents only need data in agent_inferences
+            # Diagnostic agents only need data in agent_inferences. The inner count
+            # is scoped to ai2.block_id = agent_inferences.block_id - that is, it
+            # only counts rows belonging to the same block as the candidate row
+            # itself - because a candidate is only actually usable as a window's
+            # starting point if enough rows remain within its own block to fill
+            # that window; sample_window rejects any window that crosses into a
+            # different block_id regardless of how much data exists further along
+            # in the table as a whole. Scoping this check by block_id up front
+            # means every candidate this query returns is guaranteed to produce a
+            # valid, block-homogeneous window - see _collect_windows_for_block's
+            # docstring for why this exactness matters to sample_batch.
             query = f"""
             SELECT state_source_timestamp
             FROM agent_inferences
@@ -664,15 +711,19 @@ class DBManager:
                 SELECT COUNT(*)
                 FROM agent_inferences ai2
                 WHERE ai2.state_source_timestamp >= agent_inferences.state_source_timestamp
+                AND ai2.block_id = agent_inferences.block_id
             ) >= {window_size}
             """
 
             values = []
-            if context_filter:
-                for col, val in context_filter.items():
+            if equality_filter:
+                for col, val in equality_filter.items():
                     self._validate_identifier(col)
                     query += f" AND `{col}` = %s"
                     values.append(val)
+            if min_timestamp is not None:
+                query += " AND state_source_timestamp >= %s"
+                values.append(min_timestamp)
 
             if mode.lower() == "random":
                 query += " ORDER BY RAND()"
@@ -691,33 +742,33 @@ class DBManager:
         results = self._DBManager__execute_query(query)
         parsed_results = self.parse_results(results)
         return parsed_results
-      
-    def sample_sequence(self, window_time_seed, agent_type, segment_length):
-        """
-        Samples a sequence of data from the database starting from a given timestamp.
 
-        For diagnostics agents, the candidate sequence is subjected to validation
+    def sample_window(self, window_time_seed, agent_type, window_size):
+        """
+        Samples a window of data from the database starting from a given timestamp.
+
+        For diagnostics agents, the candidate window is subjected to validation
         before being returned: it is returned to the caller only if it contains
-        exactly `segment_length` rows, and, in addition, all of those rows share an
-        identical block_id, meaning that the sequence does not span across a block
-        boundary. A sequence failing either of these conditions is considered
+        exactly `window_size` rows, and, in addition, all of those rows share an
+        identical block_id, meaning that the window does not span across a block
+        boundary. A window failing either of these conditions is considered
         invalid and causes this method to return None instead, so that no caller can
         ever receive a sampled window whose timesteps mix two distinct operating
         contexts or regimes. This validation is applied unconditionally, regardless
-        of which sampling mode requested the sequence.
+        of which sampling mode requested the window.
 
         Args:
-            window_time_seed (str): The starting timestamp for the sequence.
-            agent_type (str): The type of agent for which the sequence is being sampled.
-            segment_length (int): The length of the segment to be sampled.
+            window_time_seed (str): The starting timestamp for the window.
+            agent_type (str): The type of agent for which the window is being sampled.
+            window_size (int): The length of the window to be sampled.
         Returns:
             list or None: A list of dictionaries containing the sampled data for the
-                specified agent type; or None, if the candidate sequence proved too
+                specified agent type; or None, if the candidate window proved too
                 short, spanned more than one block_id, or a database error occurred
                 while retrieving it.
         Example:
-            >>> sequence = self.sample_sequence(window_time_seed='2023-10-01 12 :00:00', agent_type='diagnostics', segment_length=10)
-            >>> logging.debug(sequence)
+            >>> window = self.sample_window(window_time_seed='2023-10-01 12 :00:00', agent_type='diagnostics', window_size=10)
+            >>> logging.debug(window)
             [{'state_source_timestamp': '2023-10-01 12:00:00', 'state': array([0.1, 0.2])},
              {'state_source_timestamp': '2023-10-01 12:00:01', 'state': array([0.3, 0.4])},
              ...]
@@ -726,9 +777,9 @@ class DBManager:
             context_select = "".join(f", `{c}`" for c in self.context_cols)
             query = (f"SELECT state_source_timestamp, state, block_id{context_select} "
                      f"FROM agent_inferences WHERE state_source_timestamp >= '{window_time_seed}' "
-                     f"ORDER BY state_source_timestamp LIMIT {segment_length}")
+                     f"ORDER BY state_source_timestamp LIMIT {window_size}")
         else:
-            query = f"SELECT ai.state_source_timestamp, ai.state, ai.prediction, ar.next_state, ar.reward, ar.truncate, ar.terminate FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {segment_length}"
+            query = f"SELECT ai.state_source_timestamp, ai.state, ai.prediction, ar.next_state, ar.reward, ar.truncate, ar.terminate FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {window_size}"
 
         try:
             self.db_cursor.execute(query)
@@ -741,20 +792,20 @@ class DBManager:
         parsed_results = self.parse_results(results)
 
         if agent_type.lower() != "controls":
-            if len(parsed_results) != segment_length:
+            if len(parsed_results) != window_size:
                 return None
             if len({row['block_id'] for row in parsed_results}) != 1:
-                logging.debug(f"sample_sequence: rejected block-crossing window seeded at {window_time_seed}")
+                logging.debug(f"sample_window: rejected block-crossing window seeded at {window_time_seed}")
                 return None
 
         return parsed_results
-    
-    def check_sample_feasibility(self, segment_length, agent_type):
+
+    def check_sample_feasibility(self, window_size, agent_type):
         """
-        Checks if there are enough samples in the database to sample a batch of the specified segment length.
+        Checks if there are enough samples in the database to sample a batch of the specified window size.
 
         Args:
-            segment_length (int): The length of the segment to be sampled.
+            window_size (int): The length of the window to be sampled.
             agent_type (str): The type of agent for which the samples are being checked.
 
         Returns:
@@ -763,233 +814,263 @@ class DBManager:
         Raises:
             None: If the agent_type is not recognized, it returns False.
         Example:
-            >>> success = self.check_sample_feasibility(segment_length=10, agent_type='diagnostics')
+            >>> success = self.check_sample_feasibility(window_size=10, agent_type='diagnostics')
             >>> logging.debug(success)
             True
         """
         success = True
         number_of_records_prediction_table = self.get_size(table_name="agent_inferences")
-        if number_of_records_prediction_table < segment_length:
-            logging.debug("Number of records in prediction table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
+        if number_of_records_prediction_table < window_size:
+            logging.debug("Number of records in prediction table is less than window size. Cannot sample batch, waiting for more data to be recorded...")
             success = False
-        
+
         if agent_type.lower() == "controls":
             number_of_records_replay_table = self.get_size(table_name="agent_replay")
-            if number_of_records_replay_table < segment_length:
-                logging.debug("Number of records in replay table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
+            if number_of_records_replay_table < window_size:
+                logging.debug("Number of records in replay table is less than window size. Cannot sample batch, waiting for more data to be recorded...")
                 success = False
-        
+
         return success
- 
-    def _get_distinct_context_tuples(self):
-        """
-        Determines every distinct combination of context_cols values that currently
-        appears among the rows of agent_inferences, used by _resolve_stratified_groups
-        to implement the stratified_groups="all" case of sample_batch.
 
-        Returns:
-            list: A list of tuples, each of the same length as self.context_cols and
-                in that same column order, one for each distinct combination of
-                values observed. Returns an empty list if no context columns are
-                configured for this agent at all.
+    @staticmethod
+    def _parse_lookback(value):
         """
-        if not self.context_cols:
-            return []
-        cols = ", ".join(f"`{c}`" for c in self.context_cols)
-        results = self._DBManager__execute_query(f"SELECT DISTINCT {cols} FROM agent_inferences")
-        parsed = self.parse_results(results)
-        return [tuple(row[c] for c in self.context_cols) for row in parsed]
+        Normalizes sample_batch's sampling_lookback argument into a timedelta.
 
-    def _get_latest_context_tuple(self):
-        """
-        Determines the context_cols values belonging to the single most recently
-        inserted row of agent_inferences, used by _resolve_stratified_groups to
-        implement the stratified_groups="latest" case of sample_batch.
-
-        Returns:
-            tuple or None: A tuple of context values, of the same length as
-                self.context_cols and in that same column order, describing the most
-                recent row; or None, if no context columns are configured for this
-                agent, or if agent_inferences currently contains no rows at all.
-        """
-        if not self.context_cols:
-            return None
-        cols = ", ".join(f"`{c}`" for c in self.context_cols)
-        results = self._DBManager__execute_query(f"SELECT {cols} FROM agent_inferences ORDER BY id DESC LIMIT 1")
-        if not results:
-            return None
-        row = self.parse_results(results)[0]
-        return tuple(row[c] for c in self.context_cols)
-
-    def _resolve_stratified_groups(self, mode, stratified_groups):
-        """
-        Interprets sample_batch's mode and stratified_groups arguments and resolves
-        them into a single, normalized dictionary mapping each context tuple to be
-        sampled to the fraction of the batch that should be drawn from it, with all
-        such fractions summing to exactly 1.0.
-
-        When mode is "latest", context is disregarded entirely, and this method
-        returns a dictionary containing a single entry, keyed by None, with weight
-        1.0; a key of None signifies "impose no context filter" throughout the rest
-        of the sampling logic. When mode is "stratified", the interpretation instead
-        depends on the value of stratified_groups: the string "all" resolves to an
-        equal weight for every context tuple currently present in the data, as
-        determined by _get_distinct_context_tuples; the string "latest" resolves to
-        a single weight-1.0 entry for whichever context tuple belongs to the most
-        recently written row, as determined by _get_latest_context_tuple; and a
-        dictionary mapping context tuples directly to explicit weights is validated
-        - each tuple's length must equal len(self.context_cols), and the sum of all
-        weights must be positive - and then normalized so that its weights sum to
-        1.0, with an explanatory message logged at the INFO level whenever
-        normalization was actually required (that is, whenever the weights, as
-        supplied, did not already sum to 1.0).
+        Accepts a timedelta directly (returned unchanged), or a string consisting
+        of a number immediately followed by a single unit suffix - one of 's'
+        (seconds), 'm' (minutes), 'h' (hours), 'd' (days), or 'w' (weeks) - for
+        example '24h', '90m', or '3d'. There is no dependency on a third-party
+        duration-parsing library (such as pandas.Timedelta) here, since this file
+        must remain usable from every agent's container, and pandas is not a
+        dependency of every one of them (only the RL control agent's container
+        currently installs it).
 
         Args:
-            mode (str): sample_batch's own mode argument - either "latest" or
-                "stratified".
-            stratified_groups: sample_batch's own stratified_groups argument - one
-                of the string "all", the string "latest", or a dictionary mapping
-                context tuples to float weights. This argument is disregarded
-                entirely whenever mode is "latest".
+            value: A timedelta, or a string of the form '<number><unit>'.
 
         Returns:
-            dict: A dictionary mapping each context tuple (or None, signifying no
-                context filter) to the fraction, between 0.0 and 1.0, of the batch
-                that should be drawn from sequences matching that context, with all
-                fractions summing to 1.0.
+            timedelta: The equivalent duration.
 
         Raises:
-            ValueError: If stratified_groups is a dictionary containing a tuple
-                whose length does not match len(self.context_cols), if its weights
-                do not sum to a positive number, or if stratified_groups is none of
-                the recognized forms described above.
+            ValueError: If value is a string that does not match the expected format.
         """
-        if mode.lower() == "latest":
-            return {None: 1.0}
+        if isinstance(value, timedelta):
+            return value
+        unit_seconds = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400, 'w': 604800}
+        match = re.fullmatch(r'(\d+(?:\.\d+)?)([smhdw])', str(value).strip().lower())
+        if not match:
+            raise ValueError(
+                f"Invalid sampling_lookback value: {value!r}. Expected a timedelta, "
+                f"or a string like '24h', '90m', '3d' (a number followed by one of "
+                f"s/m/h/d/w)."
+            )
+        amount, unit = match.groups()
+        return timedelta(seconds=float(amount) * unit_seconds[unit])
 
-        if stratified_groups == "all":
-            tuples = self._get_distinct_context_tuples()
-            if not tuples:
-                return {None: 1.0}
-            return {t: 1.0 / len(tuples) for t in tuples}
-
-        if stratified_groups == "latest":
-            t = self._get_latest_context_tuple()
-            return {t: 1.0} if t is not None else {None: 1.0}
-
-        if isinstance(stratified_groups, dict):
-            for key in stratified_groups:
-                if len(key) != len(self.context_cols):
-                    raise ValueError(
-                        f"stratified_groups tuple {key} has length {len(key)}, "
-                        f"expected {len(self.context_cols)} (len(context_cols))"
-                    )
-            total = sum(stratified_groups.values())
-            if total <= 0:
-                raise ValueError("stratified_groups weights must sum to a positive number")
-            if abs(total - 1.0) > 1e-9:
-                logging.info(
-                    f"sample_batch: stratified_groups percentages summed to {total}, "
-                    f"not 1.0 - normalizing automatically to sum to 1.0"
-                )
-            return {tuple(k): v / total for k, v in stratified_groups.items()}
-
-        raise ValueError(f"Invalid stratified_groups value: {stratified_groups!r}")
-
-    def _collect_group_sequences(self, target_n, segment_length, agent_type, mode, context_filter, candidate_pool_size):
+    def _get_latest_timestamp(self):
         """
-        Collects as many as target_n valid, block-homogeneous sequences matching the
-        given context_filter, on behalf of a single group within sample_batch's
-        stratified-sampling logic.
-
-        A single, bounded pool of candidate starting timestamps is requested via one
-        call to get_timestamps, sized to the larger of candidate_pool_size and
-        target_n; that pool is then walked exactly once, retrieving and validating a
-        sequence via sample_sequence for each candidate in turn, and stopping as
-        soon as target_n valid sequences have been collected. This method
-        deliberately never loops indefinitely in search of more candidates: if the
-        available candidates are exhausted before target_n valid sequences have
-        been found - for instance, because many candidates were rejected by
-        sample_sequence's block-homogeneity check - this method simply returns
-        however many valid sequences it did manage to collect, which may be fewer
-        than target_n, or even zero.
-
-        Args:
-            target_n (int): The desired number of valid sequences to collect for
-                this group. If zero or negative, this method returns immediately
-                with an empty list.
-            segment_length (int): The number of consecutive rows each sequence must
-                contain.
-            agent_type (str): The type of agent for which sequences are being
-                sampled, as passed through to get_timestamps and sample_sequence.
-            mode (str): The candidate-ordering mode to pass through to
-                get_timestamps - either "random" or "latest".
-            context_filter (dict or None): The context column values, if any, that
-                candidate rows must match exactly, as passed through to
-                get_timestamps.
-            candidate_pool_size (int): A sizing hint for how many candidate
-                timestamps to request from get_timestamps in a single call; the
-                actual number requested is the larger of this value and target_n.
+        Determines the state_source_timestamp of the single most recently
+        inserted row of agent_inferences, used by sample_batch to anchor its
+        sampling_lookback window to the data's own timeline rather than to
+        wall-clock time. Anchoring to the latest row rather than to
+        datetime.now() keeps the window meaningful even if ingestion has been
+        paused for a while (the window still covers the most recent real data,
+        rather than an increasingly stale slice of it), and sidesteps any
+        question of whether the sampling and database processes' clocks agree.
 
         Returns:
-            list: A list of as many as target_n valid sequences, each itself a list
-                of row dictionaries as returned by sample_sequence. May contain
-                fewer than target_n sequences, or be empty, if insufficiently many
-                valid candidates were available.
+            datetime or None: The most recently inserted row's timestamp, or
+                None if agent_inferences currently contains no rows at all.
+        """
+        results = self._DBManager__execute_query(
+            "SELECT state_source_timestamp FROM agent_inferences ORDER BY id DESC LIMIT 1"
+        )
+        if not results:
+            return None
+        return self._parse_timestamp(self.parse_results(results)[0]['state_source_timestamp'])
+
+    def _get_block_row_counts(self, min_timestamp):
+        """
+        Determines, in a single query, every distinct block_id value that
+        appears among rows of agent_inferences whose state_source_timestamp is
+        at or after min_timestamp, together with how many such rows each one
+        has - used by sample_batch to decide which blocks to stratify sampling
+        across, and exactly how many valid windows each one can supply.
+
+        A row count alone is enough to determine a block's true capacity
+        without querying for its windows first: because a block is, by
+        construction, a contiguous run of rows sharing one block_id, any
+        window_size consecutive rows entirely within it are automatically
+        block-homogeneous, so the number of valid starting positions is exactly
+        row_count - window_size + 1 (or zero, if row_count is smaller than
+        window_size) - see sample_batch, which performs that arithmetic on
+        the counts this method returns.
+
+        Args:
+            min_timestamp (datetime): The lower bound of the sampling window.
+
+        Returns:
+            dict: A mapping from block_id (int) to the number of rows (int)
+                that block has at or after min_timestamp. Empty if no rows are
+                found in the window at all.
+        """
+        results = self._DBManager__execute_query(
+            "SELECT block_id, COUNT(*) AS row_count FROM agent_inferences "
+            "WHERE state_source_timestamp >= %s GROUP BY block_id",
+            values=(min_timestamp,)
+        )
+        return {int(row['block_id']): int(row['row_count']) for row in self.parse_results(results)}
+
+    def _collect_windows_for_block(self, block_id, target_n, window_size, agent_type, mode, min_timestamp):
+        """
+        Collects exactly target_n valid, block-homogeneous windows belonging
+        to a single block_id, with candidate starting timestamps restricted to
+        at or after min_timestamp, on behalf of sample_batch's per-block
+        sampling.
+
+        A single pool of exactly target_n candidate starting timestamps is
+        requested via one call to get_timestamps, ordered according to mode;
+        that pool is then walked once, retrieving and validating a window via
+        sample_window for each candidate in turn. sample_batch always derives
+        target_n from _get_block_row_counts's exact per-block row counts (see
+        its own docstring), so target_n never exceeds this block's true number
+        of valid windows, and get_timestamps' own candidate-selection query is
+        itself scoped to this same block (see its docstring) - so, barring a
+        genuine database error, every one of the target_n candidates returned
+        is expected to pass sample_window's validation, and this method
+        should return exactly target_n windows rather than fewer.
+
+        Args:
+            block_id (int): The block whose windows are being collected.
+            target_n (int): The number of valid windows to collect. If zero
+                or negative, this method returns immediately with an empty list.
+            window_size (int): The number of consecutive rows each window
+                must contain.
+            agent_type (str): The type of agent for which windows are being
+                sampled, as passed through to get_timestamps and sample_window.
+            mode (str): The candidate-ordering mode to pass through to
+                get_timestamps - either "random" or "latest".
+            min_timestamp (datetime): The lower bound of the sampling window, as
+                passed through to get_timestamps.
+
+        Returns:
+            list: target_n valid windows belonging to this block, each itself
+                a list of row dictionaries as returned by sample_window,
+                ordered consistently with mode (most-recent-first for "latest";
+                in the database's own RAND() order for "random"). Only contains
+                fewer than target_n windows if the caller requested more than
+                this block's true capacity, or a candidate unexpectedly failed
+                validation.
         """
         if target_n <= 0:
             return []
-        candidates = self.get_timestamps(window_size=segment_length,
+        candidates = self.get_timestamps(window_size=window_size,
                                           mode=mode,
-                                          n=max(candidate_pool_size, target_n),
+                                          n=target_n,
                                           agent_type=agent_type,
-                                          context_filter=context_filter)
-        if not candidates:
+                                          equality_filter={"block_id": block_id},
+                                          min_timestamp=min_timestamp)
+        if len(candidates) == 0:
             return []
         collected = []
         for candidate in candidates:
-            seq = self.sample_sequence(window_time_seed=candidate['state_source_timestamp'],
-                                        agent_type=agent_type,
-                                        segment_length=segment_length)
-            if seq is not None:
-                collected.append(seq)
+            window = self.sample_window(window_time_seed=candidate['state_source_timestamp'],
+                                         agent_type=agent_type,
+                                         window_size=window_size)
+            if window is not None:
+                collected.append(window)
                 if len(collected) >= target_n:
                     break
         return collected
 
-    def _build_batch_dict(self, sequences):
+    @staticmethod
+    def _allocate_with_redistribution(batch_size, available_counts):
         """
-        Assembles a list of previously collected, individually valid sequences into
+        Distributes batch_size units of quota as evenly as possible across a set
+        of blocks, subject to each block's own maximum available count, and
+        redistributes whatever quota a block cannot use to the remaining blocks
+        that still have room - a water-filling allocation. This is what
+        implements sample_batch's redistribution policy: a block unable to
+        supply its equal share does not, by itself, cause the returned batch to
+        fall short by that amount, as long as some other block has spare
+        valid windows to make up the difference.
+
+        Allocation proceeds in rounds: each round divides whatever quota
+        remains evenly across the blocks still short of their available count,
+        removes any block that reaches its own count from further
+        consideration, and repeats. This terminates within at most
+        len(available_counts) rounds, since every round both makes progress
+        (allocates at least one unit per active block) and either exhausts the
+        remaining quota or removes at least one block from consideration.
+
+        Args:
+            batch_size (int): The total quota to distribute.
+            available_counts (dict): A mapping from block_id to the number of
+                valid windows actually available for that block - each
+                block's maximum possible allocation.
+
+        Returns:
+            dict: A mapping from block_id to the number of windows allocated
+                to it. Every value is at most that block's entry in
+                available_counts, and the values sum to
+                min(batch_size, sum(available_counts.values())).
+        """
+        alloc = {b: 0 for b in available_counts}
+        remaining = batch_size
+        active = [b for b, n in available_counts.items() if n > 0]
+        while remaining > 0 and active:
+            share = max(1, remaining // len(active))
+            progressed = False
+            for b in list(active):
+                room = available_counts[b] - alloc[b]
+                take = min(share, room, remaining)
+                if take > 0:
+                    alloc[b] += take
+                    remaining -= take
+                    progressed = True
+                if alloc[b] >= available_counts[b]:
+                    active.remove(b)
+                if remaining <= 0:
+                    break
+            if not progressed:
+                break
+        return alloc
+
+    def _build_batch_dict(self, windows):
+        """
+        Assembles a list of previously collected, individually valid windows into
         the single dictionary of numpy arrays that sample_batch returns to its
         caller, for the diagnostics case.
 
         The resulting dictionary contains the key 'state_source_timestamp', an
-        array of shape (batch, segment_length); the key 'state', an array of shape
-        (batch, segment_length, n_input_channels), containing input channel values
+        array of shape (batch, window_size); the key 'state', an array of shape
+        (batch, window_size, n_input_channels), containing input channel values
         exclusively; and one further key for each entry in self.context_cols, each
-        such array being of shape (batch, segment_length) and containing that
-        context column's value at every timestep of every sequence.
+        such array being of shape (batch, window_size) and containing that
+        context column's value at every timestep of every window.
 
         Args:
-            sequences (list): A list of sequences, each itself a list of row
-                dictionaries of the form returned by sample_sequence, all sharing
-                the same segment_length.
+            windows (list): A list of windows, each itself a list of row
+                dictionaries of the form returned by sample_window, all sharing
+                the same window_size.
 
         Returns:
             dict: A dictionary of numpy arrays, keyed as described above, with
-                'batch' in every shape description referring to len(sequences).
+                'batch' in every shape description referring to len(windows).
         """
         keys = ['state_source_timestamp', 'state'] + list(self.context_cols)
         batch = {k: [] for k in keys}
-        for seq in sequences:
+        for window in windows:
             for k in keys:
-                batch[k].append([row[k] for row in seq])
+                batch[k].append([row[k] for row in window])
         for k in batch:
             batch[k] = np.array(batch[k])
         return batch
 
-    def _sample_batch_controls(self, batch_size, segment_length, mode):
+    def _sample_batch_controls(self, batch_size, window_size):
         """Legacy controls sampling path - unchanged, out of scope for context/block_id support."""
+        mode = "random"
         batch = {'state_source_timestamp': [],
                  'state': [],
                  'prediction': [],
@@ -1001,15 +1082,15 @@ class DBManager:
         required_samples = batch_size
 
         while required_samples > 0:
-            timestamps = self.get_timestamps(window_size=segment_length,
+            timestamps = self.get_timestamps(window_size=window_size,
                                             mode=mode,
                                             n=required_samples,
                                             agent_type="controls")
             for result in timestamps:
                 window_seed = result['state_source_timestamp']
-                results = self.sample_sequence(window_time_seed=window_seed,
-                                               agent_type="controls",
-                                               segment_length=segment_length)
+                results = self.sample_window(window_time_seed=window_seed,
+                                              agent_type="controls",
+                                              window_size=window_size)
 
                 if results is None:
                     raise ValueError("No results found for the given window seed.")
@@ -1024,78 +1105,120 @@ class DBManager:
 
         return batch
 
-    def sample_batch(self, batch_size, segment_length, agent_type, mode="latest", stratified_groups="all"):
+    def sample_batch(self, batch_size, window_size, agent_type,
+                      sampling_lookback="24h", sampling_strategy="latest"):
         """
-        Samples a batch of data from the database based on the specified parameters.
+        Samples a batch of block-homogeneous windows from the database,
+        stratified equally across every block that occurred within a recent
+        lookback window.
 
-        Every returned sequence is validated to be block-homogeneous (see sample_sequence) -
-        this applies in every mode, including "latest". If fewer valid sequences exist than
-        batch_size, whatever was found is returned (logged at INFO) rather than hanging or
-        raising.
+        Every returned window is validated to be block-homogeneous (see
+        sample_window), and every window's starting timestamp is restricted
+        to the most recent sampling_lookback duration, measured back from the
+        timestamp of the most recently inserted row - not wall-clock time, see
+        _get_latest_timestamp. Within that window, sampling is stratified
+        equally across every distinct block_id present, in three steps. First,
+        _get_block_row_counts determines, via a single grouped query, exactly
+        how many rows each block has in the window; since a block is a
+        contiguous run of same-block_id rows by construction, this row count
+        alone is enough to compute that block's exact number of valid
+        window_size-row windows (row_count - window_size + 1, or zero),
+        with no need to query for candidate windows merely to discover
+        availability. Second, those exact counts are passed to
+        _allocate_with_redistribution, which divides batch_size as evenly as
+        possible across however many blocks are found, redistributing whatever
+        share a block cannot use - for instance, because it only just began, or
+        was itself too short to contain many valid windows - to the other
+        blocks that do have room for it, via a water-filling allocation. Third,
+        exactly the allocated number of windows is fetched from each block via
+        _collect_windows_for_block; because get_timestamps' own candidate
+        query is itself scoped to a single block (see its docstring), this
+        fetch is exact rather than exploratory - it neither wastes candidates
+        that would only be rejected downstream, nor needs a second round to
+        make up an unexpected shortfall. Only if the total number of valid
+        windows available across every block in the window falls short of
+        batch_size in the first place does the returned batch itself fall short
+        (logged at INFO).
 
         Args:
             batch_size (int): The number of samples to be included in the batch.
-            segment_length (int): The length of each segment to be sampled.
-            agent_type (str): The type of agent for which the batch is being sampled. Valid
-                values are 'controls' or 'diagnostics'.
-            mode (str): 'latest' (most recent valid sequences, context-agnostic) or
-                'stratified' (see stratified_groups). Defaults to 'latest'.
-            stratified_groups: Only used when mode='stratified'. One of:
-                - "all" (default): sample uniformly across every distinct context_cols
-                  combination present in the data.
-                - "latest": sample only from sequences whose context matches the single
-                  most recent row's context.
-                - dict[tuple, float]: e.g. {(0,1,1,1): 0.7, (1,1,1,1): 0.3} - fraction of
-                  batch_size to sample from sequences matching each context tuple. Weights
-                  that don't sum to 1.0 are normalized (logged at INFO); a tuple with no
-                  matching valid sequences contributes 0 examples (logged at INFO, not
-                  redistributed to other groups).
+            window_size (int): The length of each window to be sampled.
+            agent_type (str): The type of agent for which the batch is being
+                sampled. Valid values are 'controls' or 'diagnostics'. Everything
+                described above applies to 'diagnostics' only; 'controls' is an
+                unrelated, unmodified legacy sampling path - see
+                _sample_batch_controls.
+            sampling_lookback (timedelta or str): How far back from the most
+                recent row's timestamp the sampling window extends. Accepts a
+                timedelta directly, or a string such as '24h', '90m', '3d' - see
+                _parse_lookback. Defaults to 24 hours.
+            sampling_strategy (str): The order in which each block's candidate
+                windows are considered - 'latest' (the block's most recent
+                valid windows) or 'random' (a uniformly random selection from
+                the block's valid windows). Defaults to 'latest'.
 
         Returns:
-            dict or None: None if agent_type is invalid or there isn't enough data at all
-            (see check_sample_feasibility). Otherwise a dict with 'state_source_timestamp',
-            'state', one array per context column (diagnostics), or the controls-specific
-            keys ('prediction', 'next_state', 'reward', 'terminate', 'truncate') for controls.
+            dict or None: None if agent_type or sampling_strategy is invalid, or
+            if there isn't enough data at all (see check_sample_feasibility).
+            Otherwise a dict with 'state_source_timestamp', 'state', one array
+            per context column (diagnostics), or the controls-specific keys
+            ('prediction', 'next_state', 'reward', 'terminate', 'truncate') for
+            controls.
         """
         if agent_type.lower() not in ["controls", "diagnostics"]:
             logging.debug(f"Invalid agent_type: {agent_type}. Valid values are 'controls' or 'diagnostics'.")
             return None
 
-        if not self.check_sample_feasibility(segment_length, agent_type):
+        if not self.check_sample_feasibility(window_size, agent_type):
             logging.debug("Not enough samples in the database to sample a batch.")
             return None
 
         if agent_type.lower() == "controls":
-            return self._sample_batch_controls(batch_size, segment_length, mode)
+            return self._sample_batch_controls(batch_size, window_size)
 
-        if mode.lower() not in ("latest", "stratified"):
-            logging.debug(f"Invalid mode: {mode}. Valid values are 'latest' or 'stratified'.")
+        if sampling_strategy.lower() not in ("latest", "random"):
+            logging.debug(f"Invalid sampling_strategy: {sampling_strategy}. Valid values are 'latest' or 'random'.")
             return None
 
-        groups = self._resolve_stratified_groups(mode, stratified_groups)
-        total_rows = self.get_size("agent_inferences")
+        lookback_td = self._parse_lookback(sampling_lookback)
+        # check_sample_feasibility above already confirmed at least window_size
+        # rows exist, so agent_inferences is guaranteed non-empty here.
+        min_timestamp = self._get_latest_timestamp() - lookback_td
 
-        sequences = []
-        for context_tuple, weight in groups.items():
-            target_n = round(weight * batch_size)
-            context_filter = dict(zip(self.context_cols, context_tuple)) if context_tuple is not None else None
-            group_mode = "latest" if mode.lower() == "latest" else "random"
-            group_sequences = self._collect_group_sequences(target_n=target_n,
-                                                              segment_length=segment_length,
-                                                              agent_type=agent_type,
-                                                              mode=group_mode,
-                                                              context_filter=context_filter,
-                                                              candidate_pool_size=total_rows)
-            if target_n > 0 and len(group_sequences) == 0 and context_tuple is not None:
-                logging.info(f"sample_batch: no valid block-homogeneous windows found for context "
-                             f"group {context_filter}; contributing 0 examples")
-            sequences.extend(group_sequences)
+        # Step 1: determine every block's exact capacity from row counts alone -
+        # see _get_block_row_counts's docstring for why a count is sufficient,
+        # with no need to fetch candidate windows merely to learn availability.
+        row_counts = self._get_block_row_counts(min_timestamp)
+        if not row_counts:
+            logging.info(f"sample_batch: no blocks found within the last {lookback_td} of data; returning empty batch")
+            return self._build_batch_dict([])
+        available_counts = {block_id: max(0, count - window_size + 1)
+                             for block_id, count in row_counts.items()}
 
-        if len(sequences) < batch_size:
+        # Step 2: allocate batch_size across blocks in a single pass, using
+        # those exact counts - no exploratory request-then-redistribute rounds
+        # are needed, since every block's true ceiling is already known.
+        alloc = self._allocate_with_redistribution(batch_size, available_counts)
+
+        # Step 3: fetch exactly the allocated number of windows from each
+        # block - see _collect_windows_for_block's docstring for why this
+        # fetch is expected to return exactly what was asked for, rather than
+        # needing to over-request as a safety margin.
+        windows = []
+        for block_id, n in alloc.items():
+            windows.extend(self._collect_windows_for_block(block_id=block_id,
+                                                             target_n=n,
+                                                             window_size=window_size,
+                                                             agent_type=agent_type,
+                                                             mode=sampling_strategy.lower(),
+                                                             min_timestamp=min_timestamp))
+
+        if len(windows) < batch_size:
             logging.info(f"sample_batch: requested batch_size={batch_size} but only found "
-                         f"{len(sequences)} valid block-homogeneous sequences; returning partial batch")
+                         f"{len(windows)} valid block-homogeneous windows across "
+                         f"{len(row_counts)} block(s) within the last {lookback_td}; returning partial batch")
 
-        return self._build_batch_dict(sequences)
+        return self._build_batch_dict(windows)
 
     def record_sensor_data(self, data):
         """
@@ -1147,7 +1270,7 @@ class DBManager:
                 logging.warning(f"DBManager: could not update latest-row cache after write: {e}")
 
         return status
-    
+
     def get_state_id(self, source_timestamp):
         """
         Retrieves the state ID based on the source timestamp.
@@ -1160,16 +1283,16 @@ class DBManager:
         """
         query = f"SELECT id FROM agent_inferences WHERE state_source_timestamp = '{source_timestamp}'"
         results = self.__execute_query(query)
-        
+
         if len(results) == 0:
             logging.debug(f"No state found for source timestamp: {source_timestamp}")
             return None
         elif len(results) > 1:
             logging.debug(f"Multiple states found for source timestamp: {source_timestamp}, returning the first one.")
             return [int(results[i]['id']) for i in range(len(results))]
-        
+
         return int(results[0]['id'])
-    
+
     def record_prediction(self, prediction, prediction_timestamp, key_value, key="state_source_timestamp"):
         """
         Records a prediction in the database.
@@ -1187,20 +1310,20 @@ class DBManager:
         """
         assert isinstance(prediction, np.ndarray), "Prediction must be a numpy array"
         assert key in ['state_source_timestamp', 'state_id'], f"Key must be one of 'state_source_timestamp' or 'state_id', got {key}"
-        
+
         query = f"UPDATE agent_inferences set prediction = %s, prediction_timestamp = '{prediction_timestamp}' WHERE {key} = %s"
         values = (prediction.tobytes(), key_value)
-        
-        status = self.__execute_and_commit(query, values=values)    
-            
+
+        status = self.__execute_and_commit(query, values=values)
+
         return status
-    
+
     def record_controls_tuple(self, data, state_id):
         """
         Records a controls tuple in the database.
 
         Args:
-            data (dict): A dictionary containing the controls tuple data to be stored. 
+            data (dict): A dictionary containing the controls tuple data to be stored.
                          It must contain keys such as 'next_state', 'reward', 'terminate', and 'truncate'.
             state_id (int): The ID of the state to which this controls tuple belongs.
 
@@ -1216,11 +1339,11 @@ class DBManager:
         assert 'reward' in data, "controls tuple must contain 'reward'"
         assert 'terminate' in data, "controls tuple must terminate"
         assert 'truncate' in data, "controls tuple must contain truncate"
-        
+
         if state_id is None:
             logging.debug("State ID is None. Cannot store controls tuple.")
             return 1
-        
+
         query = f"INSERT INTO agent_replay (state_id, "
         query_columns = ""
         query_values = f"({state_id}, "
@@ -1234,14 +1357,14 @@ class DBManager:
             query_columns+= f"{key}, "
             query_values += f"%s, "
             values.append(data[key])
-        
+
         query += query_columns[:-2] + ") VALUES " + query_values[:-2] + ")"
-        
-        
+
+
         status = self.__execute_and_commit(query, values=tuple(values))
-        
+
         return status
-    
+
     def get_size(self, table_name):
         """
         Returns the number of records in the specified table.
@@ -1256,12 +1379,12 @@ class DBManager:
         self.db_cursor.execute(query)
         rowcount = self.db_cursor.fetchone()
         return rowcount['COUNT(*)']
-            
+
     def close(self):
         """
         Closes the database cursor and connection, terminating the current session.
 
-        This method is used to gracefully close the database connection and cursor 
+        This method is used to gracefully close the database connection and cursor
         once all operations are complete. It ensures that resources are released properly.
 
         Args:

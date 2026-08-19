@@ -151,6 +151,12 @@ contextual_autoencoder_agent1:
   # when a configured context column's value changes (see the context_channels entry
   # under model_input, below).
   max_gap_seconds: 5.0
+  # How far back sample_batch looks, and in what order it considers each block's
+  # candidate sequences, when assembling a training batch - see DBManager.sample_batch.
+  # These are set explicitly here, matching sample_batch's own defaults, rather than
+  # left to fall back on them implicitly.
+  sampling_lookback: "24h"
+  sampling_strategy: "latest"
   encoder_dims: [64, 32, 16]
   learning_rate: 0.0001
   batch_size: 16

@@ -119,6 +119,13 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.epochs = config.get('epochs', 50)
         self.anomaly_threshold_type = config.get('anomaly_threshold_type', 'fixed')
 
+        # Passed straight through to DBManager.sample_batch (see its docstring for
+        # the full sampling behavior). Defaults here intentionally mirror
+        # sample_batch's own defaults, so omitting these keys from the agent's
+        # config is equivalent to omitting them from a direct sample_batch call.
+        self.sampling_lookback = config.get('sampling_lookback', "24h")
+        self.sampling_strategy = config.get('sampling_strategy', 'latest')
+
         if self.anomaly_threshold_type == 'percentile':
             self.threshold_percentile = config.get('threshold_percentile', 95.0)
         else:
@@ -308,69 +315,103 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
     
     def get_training_data(self) -> Optional[np.ndarray]:
         """
-        Retrieve raw training data from database and apply preprocessing pipeline.
+        Retrieve raw training data from database and apply preprocessing pipeline,
+        but only if new data has arrived since the last successful training round
+        (see the total_samples <= self.last_training_count check, below). This
+        gate exists specifically to stop training_loop() from retraining on data
+        it has already trained on; eval_model() deliberately does not go through
+        this method for that reason - see _fetch_and_preprocess_batch's docstring.
         """
         try:
             # Check if enough data available
-            total_samples = self.db_manager.get_size("agent_inferences") 
-            
+            total_samples = self.db_manager.get_size("agent_inferences")
+
             logging.info(f"AEMLTrainingThread: Database contains {total_samples} samples (need {self.min_training_samples})")
-            
+
             if total_samples < self.min_training_samples:
                 logging.debug(f"AEMLTrainingThread: Not enough samples for training: {total_samples} < {self.min_training_samples}")
                 return None
-            
+
             # Check if we have new data since last training
             if total_samples <= self.last_training_count:
                 logging.debug("AEMLTrainingThread: No new data since last training")
                 return None
-            
+
             logging.info(f"AEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
-            
-            # Get consecutive sequences from database using window_size as segment_length
-            batch_data = self.db_manager.sample_batch(
-                batch_size=self.batch_size * self.samples_multiplier,
-                segment_length=self.window_size,
-                agent_type="diagnostics",
-                mode="latest"
-            )
-            
-            logging.info(f"AEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
-            
-            if batch_data is None or len(batch_data['state']) == 0:
-                logging.warning("AEMLTrainingThread: No batch data returned from database")
+
+            flattened_windows = self._fetch_and_preprocess_batch()
+            if flattened_windows is None:
                 return None
-            
-            # Execute preprocessing pipeline
-            logging.info("AEMLTrainingThread: Starting preprocessing pipeline...")
-            
-            try:
-                windowed_array = self.preprocessing_manager.execute_pipeline(batch_data['state'])
-                
-                if windowed_array is None or len(windowed_array) == 0:
-                    logging.error("AEMLTrainingThread: No valid windows created by preprocessing pipeline")
-                    return None
-                    
-            except Exception as pipeline_error:
-                logging.error(f"AEMLTrainingThread: Preprocessing pipeline failed: {pipeline_error}")
-                return None
-            
-            # Log final statistics
-            logging.info(f"AEMLTrainingThread: Final windowed data shape: {windowed_array.shape}")
-            logging.debug(f"AEMLTrainingThread: Data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
-            logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(windowed_array):.6f}")
-            logging.debug(f"AEMLTrainingThread: Data std: {np.std(windowed_array):.6f}")
-            
+
             # Update training count
             self.last_training_count = total_samples
-            
-            logging.info(f"AEMLTrainingThread: Successfully prepared {len(windowed_array)} training windows using preprocessing pipeline")
-            return windowed_array
-            
+
+            return flattened_windows
+
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
             logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
             return None
+
+    def _fetch_and_preprocess_batch(self) -> Optional[np.ndarray]:
+        """
+        Samples one batch of windows from the database and runs it through the
+        preprocessing pipeline, with no gating on whether the data is "new."
+
+        This is used by both get_training_data(), above, which applies that
+        "new since last training" gate itself before calling here, and by
+        eval_model(), which deliberately calls this directly instead of going
+        through get_training_data(). eval_model() only needs some current data
+        to score the model against, not specifically unseen data - if it went
+        through get_training_data() instead, it would be racing the very
+        training_loop() call that just ran moments earlier and already bumped
+        last_training_count to the current total_samples, so it would return
+        None unless a brand new row happened to arrive in that narrow window.
+        That was a real, previously-observed bug: it caused eval to fail on
+        roughly half of all training cycles, each such failure leaving that
+        model version's saved metadata without an anomaly_threshold_95 value.
+
+        Returns:
+            np.ndarray or None: The batch's windows after preprocessing, or
+                None if no batch data or no valid windows were available.
+        """
+        # Get consecutive windows from database, each of length window_size
+        batch_data = self.db_manager.sample_batch(
+            batch_size=self.batch_size * self.samples_multiplier,
+            window_size=self.window_size,
+            agent_type="diagnostics",
+            sampling_lookback=self.sampling_lookback,
+            sampling_strategy=self.sampling_strategy,
+        )
+
+        logging.info(f"AEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
+
+        if batch_data is None or len(batch_data['state']) == 0:
+            logging.warning("AEMLTrainingThread: No batch data returned from database")
+            return None
+
+        # Execute preprocessing pipeline
+        logging.info("AEMLTrainingThread: Starting preprocessing pipeline...")
+
+        try:
+            flattened_windows = self.preprocessing_manager.execute_pipeline(batch_data['state'])
+
+            if flattened_windows is None or len(flattened_windows) == 0:
+                logging.error("AEMLTrainingThread: No valid windows created by preprocessing pipeline")
+                return None
+
+        except Exception as pipeline_error:
+            logging.error(f"AEMLTrainingThread: Preprocessing pipeline failed: {pipeline_error}")
+            return None
+
+        # Log final statistics
+        logging.info(f"AEMLTrainingThread: Final flattened windows shape: {flattened_windows.shape}")
+        logging.debug(f"AEMLTrainingThread: Data range: [{np.min(flattened_windows):.6f}, {np.max(flattened_windows):.6f}]")
+        logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(flattened_windows):.6f}")
+        logging.debug(f"AEMLTrainingThread: Data std: {np.std(flattened_windows):.6f}")
+
+        logging.info(f"AEMLTrainingThread: Successfully prepared {len(flattened_windows)} training windows using preprocessing pipeline")
+        return flattened_windows
 
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
         """
@@ -443,13 +484,19 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         """
         Evaluate the trained model.
         Denormalization is handled separately as post-processing (not part of pipeline).
+
+        Calls _fetch_and_preprocess_batch() directly rather than get_training_data(),
+        since evaluation only needs some current data to score the model against, not
+        specifically data unseen since the last training round - see
+        _fetch_and_preprocess_batch's docstring for why going through
+        get_training_data() here would be a bug, not just a stylistic difference.
         """
         try:
             if self.model is None:
                 return {'error': 'No model to evaluate'}
-            
+
             # Get small batch of recent preprocessed data for evaluation
-            eval_data = self.get_training_data()
+            eval_data = self._fetch_and_preprocess_batch()
             if eval_data is None:
                 return {'error': 'No evaluation data available'}
             
@@ -697,11 +744,20 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
             # Load the TensorFlow model
             self.model = tf.keras.models.load_model(model_file)
-            
+
             # Update instance variables from metadata
             self.input_dim = latest_info['input_dim']
 
-            # Overwrite self.anomaly_threshold only if latest_info has the relevant key; otherwise, keep previous threshold
+            # Only adopt this version's threshold if its evaluation actually
+            # produced one - eval_model() saves a dict with an 'error' key
+            # instead of 'anomaly_threshold_95' whenever evaluation itself
+            # failed (e.g. no data was available to evaluate against at that
+            # moment), and silently substituting an arbitrary hardcoded
+            # default in that case would make live anomaly detection depend
+            # on a constant that has nothing to do with this deployment's
+            # configured threshold. Keeping the previous threshold instead is
+            # strictly safer: it's already a real, previously-validated value
+            # for this same model architecture and threshold configuration.
             new_threshold = latest_info.get('eval_metrics', {}).get('anomaly_threshold_95')
             if new_threshold is not None:
                 self.anomaly_threshold = new_threshold
@@ -711,7 +767,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                                  f"{self.anomaly_threshold}")
 
             self.current_model_version = model_version
-            
+
             logging.info(f"AEMLInferenceThread: Loaded model v{model_version}: input_dim={self.input_dim}, threshold={self.anomaly_threshold}")
             
         except Exception as e:
@@ -755,15 +811,15 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Create inference window using preprocessing pipeline
             try:
                 # Get the most recent window_size samples
-                current_sequence = [self.recent_data[-self.window_size:]]
-                
+                current_window = [self.recent_data[-self.window_size:]]
+
                 # Execute preprocessing pipeline (handles normalization, windowing, etc.)
-                window_data = self.preprocessing_manager.execute_pipeline(current_sequence)
-                
-                if len(window_data) == 0:
+                flattened_windows = self.preprocessing_manager.execute_pipeline(current_window)
+
+                if len(flattened_windows) == 0:
                     raise ValueError("No valid windows created by preprocessing pipeline")
-                
-                flattened_window = window_data[0:1]  # Get first (and only) window as batch
+
+                flattened_window = flattened_windows[0:1]  # Get first (and only) window as batch
                 
             except Exception as pipeline_error:
                 logging.error(f"AEMLInferenceThread: Preprocessing pipeline failed: {pipeline_error}")
