@@ -1,5 +1,3 @@
-source: "CEBAF"
-
 mqtt:
   topics:      
     - topic: "bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading"
@@ -75,9 +73,9 @@ autoencoder_agent1:
   preprocessing_pipeline:
     - bounds_normalizer
     - window_processor
-  window_size: 10
+  window_size: 5
   min_training_samples: 100
-  encoder_dims: [32, 16]
+  encoder_dims: [64, 32, 16]
   learning_rate: 0.0001
   batch_size: 16
   samples_multiplier: 3
@@ -85,27 +83,29 @@ autoencoder_agent1:
   enabled_threads: ['ingest', 'training', 'inference']
   model_input:
       channels:
-      - state_signal_0
-      - state_condition_1
-      - state_condition_2
-      - state_condition_3
-
+      - IPMK101.XPOS
+      - IPMK101.YPOS
+      - IGLK100HVPSkVolts
+      - ITFHALLAMODE
+      - ITFFCupK6485correctedCur.VAL
+      
       bounds:
-      - [-100.0, 100.0]   # state_signal_0: wave sample value
-      - [1.0, 20.0]       # state_condition_1: amplitude
-      - [1.0, 20.0]       # state_condition_2: frequency
-      - [-20.0, 20.0]     # state_condition_3: drift
+      - [-2.0, 2.0]
+      - [-2.0, 2.0]
+      - [10.0, 200.0]
+      - [0.0, 5.0]
+      - [0.0, 65.0]
 
-      switch:
-        state_signal_0:
-          greater_than: -1000.0
-
-  model_output:
-      channels:
-      - state_signal_0
-
+      switch: # By default switch follows "AND" operation; #TODO: Define AND, OR combination logic
+        IGLK100HVPSkVolts: 
+          greater_than: 10.0
+        ITFHALLAMODE:
+          greater_than: 0.0 
+        ITFFCupK6485correctedCur.VAL:
+          greater_than: 0.0
+      
   kafka_topics:
-    input: "gymnasium-output"
+    input: "CEBAF"
     output: "autoencoder1-anomalies"
     training_output: "autoencoder1-training-results"
 
@@ -130,11 +130,6 @@ autoencoder_agent2:
       - [-2.0, 2.0]
       - [-2.0, 2.0]
       
-  model_output:
-      channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-
   kafka_topics:
     input: "CEBAF"
     output: "autoencoder2-anomalies"
@@ -178,9 +173,6 @@ contextual_autoencoder_agent1:
     # a real PV readback — so an exact-equality-ish tolerance is appropriate. 1e-6 rather
     # than literal 0 as a defensive margin against float round-trip precision changes.
     context_tolerance: 1e-6
-  model_output:
-    channels:
-      - state_signal_0
   kafka_topics:
     input: "gymnasium-output"
     output: "cae1-anomalies"

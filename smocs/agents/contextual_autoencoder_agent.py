@@ -700,9 +700,9 @@ class ContextualAutoencoderAgent(AutoencoderAgent):
 def main():
     """Main entry point for contextual autoencoder agent."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--agent_config_key", help="Key for agent configuration dict in the config file", type=str, default='contextual_autoencoder_agent1')
+    parser.add_argument("--agent_config", help="Key for agent configuration dict in the config file", type=str, default='contextual_autoencoder_agent1')
     args = parser.parse_args()
-    config_key = args.agent_config_key
+    config_key = args.agent_config
 
     setup_logging()
     config_path = os.getenv('CONFIG_PATH', '/app/config.yaml')

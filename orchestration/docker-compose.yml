@@ -119,8 +119,6 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
-      #KAFKA_TOPIC: my-topic
-      KAFKA_TOPIC: cae1-anomalies
       INFLUXDB_URL: http://influxdb:8086
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG}
