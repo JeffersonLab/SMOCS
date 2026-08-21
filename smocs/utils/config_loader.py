@@ -90,6 +90,10 @@ class ConfigLoader:
                 'decomposed': output_topics.get('decomposed', 'gymnasium-output')
             }
 
+    def get_gymnasium_env_kwargs(self) -> Dict[str, Any]:
+        """Get environment constructor keyword arguments from config."""
+        return self.config.get('gymnasium', {}).get('env_kwargs', {})
+
     def get_gymnasium_config(self) -> Dict[str, Any]:
         """Get complete gymnasium configuration with defaults"""
         return {
@@ -101,7 +105,8 @@ class ConfigLoader:
             'step_delay': self.get_gymnasium_step_delay(),
             'reset_on_start': self.get_gymnasium_reset_on_start(),
             'max_episode_steps': self.get_gymnasium_max_episode_steps(),
-            'render_mode': self.get_gymnasium_render_mode()
+            'render_mode': self.get_gymnasium_render_mode(),
+            'env_kwargs': self.get_gymnasium_env_kwargs(),
         }
     
     # Kafka Configuration Methods

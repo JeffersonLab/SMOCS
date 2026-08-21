@@ -17,3 +17,8 @@ register(
     id='SCORE-IndustryParticleAccelerator-v0',
     entry_point='smocs.control_plane.proxy_industry_env:IndustryParticleAcceleratorEnv',
 )
+
+register(
+    id='WaveGenerator-v0',
+    entry_point='smocs.control_plane.wave_generator_env:WaveGeneratorEnv',
+)

@@ -1,5 +1,3 @@
-source: "CEBAF"
-
 mqtt:
   topics:      
     - topic: "bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading"
@@ -33,21 +31,37 @@ epics:
       
 gymnasium:
   # Environment settings
-  environment: "Pendulum-v1"
+  environment: "WaveGenerator-v0"
   render_mode: null  # Options: null, 'human', 'rgb_array'
   max_episode_steps: null  # null uses environment default
-  
+
+  # Environment constructor kwargs (passed to gym.make via env_kwargs)
+  env_kwargs:
+    reference_period: 100
+    default_wave_type: 0      # 0=Sine
+    default_amplitude: 5.0
+    default_frequency: 3
+    default_drift: 0.0
+    default_noise_level: 0.5
+    auto_anomaly_enabled: true
+    auto_anomaly_p_per_step: 0.01   # ~1 anomaly per 100 steps
+    auto_anomaly_cooldown: 100
+    auto_anomaly_dur_min: 20
+    auto_anomaly_dur_max: 100
+    auto_anomaly_mag_min: 1.5
+    auto_anomaly_mag_max: 5.0
+
   # Kafka topics
   input_topic: "gymnasium-action"
   output_topics:
     sarsa: "gymnasium-sarsa"
     state: "gymnasium-state"
     decomposed: "gymnasium-output"
-  
+
   # Operation mode
   blocking_mode: false  # true = wait for Kafka actions, false = use default actions
-  default_action_strategy: "random"  # Options: 'random', 'zero'
-  step_delay: 0.0  # Delay in seconds between steps
+  default_action_strategy: "zero"  # Options: 'random', 'zero'
+  step_delay: 0.1  # Delay in seconds between steps (10 steps/sec)
   reset_on_start: true  # Reset environment on startup
 
 kafka:
@@ -90,11 +104,6 @@ autoencoder_agent1:
         ITFFCupK6485correctedCur.VAL:
           greater_than: 0.0
       
-  model_output:
-      channels:
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-
   kafka_topics:
     input: "CEBAF"
     output: "autoencoder1-anomalies"
@@ -121,15 +130,53 @@ autoencoder_agent2:
       - [-2.0, 2.0]
       - [-2.0, 2.0]
       
-  model_output:
-      channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-
   kafka_topics:
     input: "CEBAF"
     output: "autoencoder2-anomalies"
     training_output: "autoencoder2-training-results"
+
+contextual_autoencoder_agent1:
+  preprocessing_pipeline:
+    - bounds_normalizer
+    - window_processor
+  window_size: 10
+  min_training_samples: 100
+  encoder_dims: [64, 32, 16]
+  learning_rate: 0.0001
+  batch_size: 16
+  samples_multiplier: 3
+  epochs: 10
+  anomaly_threshold_type: fixed
+  threshold: 0.001
+  enabled_threads: ['ingest', 'training', 'inference']
+  model_input:
+    channels:
+      - state_signal_0   # WaveGeneratorEnv 'signal' — the wave sample to reconstruct
+    bounds:
+      - [-100.0, 100.0]
+    context_channels:
+      # WaveGeneratorEnv 'condition' (declared, not actual) — the intended shape of
+      # the wave. Auto-injected anomalies perturb the actual signal without moving
+      # these, so a mismatch here means a genuine reconfiguration (context_drift),
+      # while an unexplained mismatch in state_signal_0 means a real anomaly.
+      - state_condition_0   # wave_type: 0=sine, 1=square, 2=sawtooth, 3=triangle
+      - state_condition_1   # amplitude
+      - state_condition_2   # frequency
+      - state_condition_3   # drift
+    context_bounds:
+      - [0.0, 3.0]
+      - [1.0, 20.0]
+      - [1.0, 20.0]
+      - [-20.0, 20.0]
+    # Declared condition values only change on an explicit CONFIGURE/RESET_WITH_PARAMS
+    # command (see WaveGeneratorEnv._apply_wave_config) — no per-step sensor noise like
+    # a real PV readback — so an exact-equality-ish tolerance is appropriate. 1e-6 rather
+    # than literal 0 as a defensive margin against float round-trip precision changes.
+    context_tolerance: 1e-6
+  kafka_topics:
+    input: "gymnasium-output"
+    output: "cae1-anomalies"
+    training_output: "cae1-training-results"
 
 rl_control_agent1:
   environment: "Pendulum-v1"

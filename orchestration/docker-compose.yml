@@ -119,7 +119,6 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
-      KAFKA_TOPIC: my-topic
       INFLUXDB_URL: http://influxdb:8086
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG}
@@ -143,7 +142,7 @@ services:
       MYSQL_HOST: ${MYSQL_HOST}  
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      #MYSQL_DATABASE: ${MYSQL_DATABASE}    # Commenting to enable _setup_db_connection in agent_base to set it to its default value of "agentdb" which is hardcoded in init.sql. Will eventually be completely removed since there is no need to set a configurable database name for the agent. The agent will always use "agentdb" as the database name.
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CONFIG_PATH: /app/config.yaml
       PYTHONPATH: /app
@@ -175,6 +174,18 @@ services:
       - "3305:3305"
     volumes:
       - mysql-data-ae2:/var/lib/mysql
+
+  contextual-autoencoder-agent1:
+    extends: agent
+    profiles: ["contextual-autoencoder1"]
+    environment:
+      AGENT_TYPE: contextual_autoencoder
+      AGENT_CONFIG: contextual_autoencoder_agent1
+      SMOCS_LOG_LEVEL: INFO
+    ports:
+      - "3309:3306"
+    volumes:
+      - mysql-data-cae1:/var/lib/mysql
 
   rl-control-agent1:
     extends: agent
@@ -274,6 +285,7 @@ volumes:
   grafana-storage:
   mysql-data-ae1:
   mysql-data-ae2:
+  mysql-data-cae1:
   mysql-data-rl1:  
   soct-configs: 
   rl-logs-1: 

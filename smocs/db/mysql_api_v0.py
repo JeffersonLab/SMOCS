@@ -37,7 +37,8 @@ class DBManager:
             Connected to DB: my_database
         """
         
-        self.db_name = f"SMOCS_Agent_{db_cfg_dict['database']}"
+        #self.db_name = f"SMOCS_Agent_{db_cfg_dict['database']}"
+        self.db_name = db_cfg_dict['database']
         logging.debug("initializing DBConnector")
         
         self.connect(db_cfg_dict)

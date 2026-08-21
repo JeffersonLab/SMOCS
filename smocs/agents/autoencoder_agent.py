@@ -671,7 +671,16 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
             # Update instance variables from metadata
             self.input_dim = latest_info['input_dim']
-            self.anomaly_threshold = latest_info.get('eval_metrics', {}).get('anomaly_threshold_95', 0.1)
+
+            # Overwrite self.anomaly_threshold only if latest_info has the relevant key; otherwise, keep previous threshold
+            new_threshold = latest_info.get('eval_metrics', {}).get('anomaly_threshold_95')
+            if new_threshold is not None:
+                self.anomaly_threshold = new_threshold
+            else:
+                logging.warning(f"AEMLInferenceThread: Model v{model_version} has no anomaly_threshold_95 in its "
+                                 f"eval_metrics ({latest_info.get('eval_metrics')}); keeping previous threshold "
+                                 f"{self.anomaly_threshold}")
+
             self.current_model_version = model_version
             
             logging.info(f"AEMLInferenceThread: Loaded model v{model_version}: input_dim={self.input_dim}, threshold={self.anomaly_threshold}")
