@@ -33,11 +33,16 @@ def db_manager(mock_db_objects):
 
 @pytest.fixture
 def db_manager_ctx(mock_db_objects):
-    """Same as db_manager, but configured with context columns + a gap threshold."""
+    """
+    Same as db_manager, but configured with a gap threshold. agent_inferences'
+    context column is fixed and always present regardless of configuration - see
+    DBManager.__init__ - so, unlike max_gap_seconds, there is no separate
+    context-related config key to set up here; tests exercise context behavior by
+    including (or omitting) a 'context' entry directly in their test data.
+    """
     mock_conn, mock_cursor = mock_db_objects
     db_cfg = {
-        "host": "localhost", "user": "user", "pwd": "pwd",
-        "context_cols": ["ctx1", "ctx2"], "max_gap_seconds": 5.0,
+        "host": "localhost", "user": "user", "pwd": "pwd", "max_gap_seconds": 5.0,
     }
     with patch("smocs.db.mysql_api_v0.mysql.connect", return_value=mock_conn):
         manager = DBManager(db_cfg)
@@ -180,9 +185,9 @@ def test_max_gap_seconds_defaults_to_infinity_when_key_absent(mock_db_objects):
 
 
 def test_compute_block_id_no_new_block_on_gap_when_max_gap_seconds_unset(db_manager):
-    db_manager._latest_row = {"timestamp": datetime(2025, 8, 1, 0, 0, 0), "context": (), "block_id": 2}
+    db_manager._latest_row = {"timestamp": datetime(2025, 8, 1, 0, 0, 0), "context": None, "block_id": 2}
     data = {"state_source_timestamp": "2026-01-01 00:00:00.000000"}  # huge gap
-    assert db_manager._compute_block_id(data) == 2
+    assert db_manager._compute_block_id(data, None) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +196,8 @@ def test_compute_block_id_no_new_block_on_gap_when_max_gap_seconds_unset(db_mana
 
 def test_compute_block_id_first_row_is_zero(db_manager_ctx):
     db_manager_ctx._latest_row = None
-    data = {"state_source_timestamp": "2025-08-01 00:00:00.000000", "ctx1": 0.0, "ctx2": 1.0}
-    assert db_manager_ctx._compute_block_id(data) == 0
+    data = {"state_source_timestamp": "2025-08-01 00:00:00.000000"}
+    assert db_manager_ctx._compute_block_id(data, (0.0, 1.0)) == 0
 
 
 def test_compute_block_id_new_block_on_gap(db_manager_ctx):
@@ -202,8 +207,8 @@ def test_compute_block_id_new_block_on_gap(db_manager_ctx):
         "block_id": 3,
     }
     # 10s gap > max_gap_seconds (5.0), same context
-    data = {"state_source_timestamp": "2025-08-01 00:00:10.000000", "ctx1": 0.0, "ctx2": 1.0}
-    assert db_manager_ctx._compute_block_id(data) == 4
+    data = {"state_source_timestamp": "2025-08-01 00:00:10.000000"}
+    assert db_manager_ctx._compute_block_id(data, (0.0, 1.0)) == 4
 
 
 def test_compute_block_id_new_block_on_context_change(db_manager_ctx):
@@ -213,8 +218,8 @@ def test_compute_block_id_new_block_on_context_change(db_manager_ctx):
         "block_id": 3,
     }
     # within the gap, but context changed
-    data = {"state_source_timestamp": "2025-08-01 00:00:01.000000", "ctx1": 1.0, "ctx2": 1.0}
-    assert db_manager_ctx._compute_block_id(data) == 4
+    data = {"state_source_timestamp": "2025-08-01 00:00:01.000000"}
+    assert db_manager_ctx._compute_block_id(data, (1.0, 1.0)) == 4
 
 
 def test_compute_block_id_continues_block(db_manager_ctx):
@@ -224,8 +229,8 @@ def test_compute_block_id_continues_block(db_manager_ctx):
         "block_id": 3,
     }
     # within the gap, same context
-    data = {"state_source_timestamp": "2025-08-01 00:00:01.000000", "ctx1": 0.0, "ctx2": 1.0}
-    assert db_manager_ctx._compute_block_id(data) == 3
+    data = {"state_source_timestamp": "2025-08-01 00:00:01.000000"}
+    assert db_manager_ctx._compute_block_id(data, (0.0, 1.0)) == 3
 
 
 def test_record_sensor_data_injects_block_id_and_updates_cache(db_manager_ctx):
@@ -234,23 +239,49 @@ def test_record_sensor_data_injects_block_id_and_updates_cache(db_manager_ctx):
     data = {
         "state_source_timestamp": "2025-08-01 00:00:00.000000",
         "state": np.array([1.0, 2.0]),
-        "ctx1": 0.0,
-        "ctx2": 1.0,
+        "context": np.array([0.0, 1.0], dtype=np.float32),
     }
     status = db_manager_ctx.record_sensor_data(data)
     assert status == 0
     assert data["block_id"] == 0
+    # 'context', like 'state', is serialized to bytes in place before the INSERT -
+    # see record_sensor_data - so the caller's own dict reflects that afterward too.
+    assert isinstance(data["context"], bytes)
     assert db_manager_ctx._latest_row["block_id"] == 0
     assert db_manager_ctx._latest_row["context"] == (0.0, 1.0)
 
 
+def test_record_sensor_data_without_context_leaves_cache_context_none(db_manager):
+    # An agent with no notion of context (for example, the plain autoencoder) simply
+    # never includes a 'context' entry at all - this must not raise or otherwise be
+    # treated as an error.
+    db_manager._latest_row = None
+    db_manager._DBManager__execute_and_commit = MagicMock(return_value=0)
+    data = {"state_source_timestamp": "2025-08-01 00:00:00.000000", "state": np.array([1.0, 2.0])}
+    status = db_manager.record_sensor_data(data)
+    assert status == 0
+    assert db_manager._latest_row["context"] is None
+
+
 def test_refresh_latest_row_cache_seeds_from_db(db_manager_ctx):
     db_manager_ctx._DBManager__execute_query = MagicMock(return_value=[
-        {"state_source_timestamp": datetime(2025, 8, 1, 0, 0, 0), "block_id": 7, "ctx1": 0.0, "ctx2": 1.0}
+        {"state_source_timestamp": datetime(2025, 8, 1, 0, 0, 0), "block_id": 7,
+         "context": np.array([0.0, 1.0], dtype=np.float32).tobytes()}
     ])
     db_manager_ctx.refresh_latest_row_cache()
     assert db_manager_ctx._latest_row["block_id"] == 7
     assert db_manager_ctx._latest_row["context"] == (0.0, 1.0)
+
+
+def test_refresh_latest_row_cache_seeds_none_context_when_null(db_manager_ctx):
+    # agent_inferences' context column is nullable - a row written by an agent with
+    # no notion of context (or written before context was ever introduced) has NULL
+    # there, which parse_results leaves as None rather than decoding as bytes.
+    db_manager_ctx._DBManager__execute_query = MagicMock(return_value=[
+        {"state_source_timestamp": datetime(2025, 8, 1, 0, 0, 0), "block_id": 3, "context": None}
+    ])
+    db_manager_ctx.refresh_latest_row_cache()
+    assert db_manager_ctx._latest_row["context"] is None
 
 
 def test_refresh_latest_row_cache_empty_table(db_manager_ctx):
@@ -259,60 +290,13 @@ def test_refresh_latest_row_cache_empty_table(db_manager_ctx):
     assert db_manager_ctx._latest_row is None
 
 
-# ---------------------------------------------------------------------------
-# Schema migration
-# ---------------------------------------------------------------------------
-
-def test_migrate_inferences_schema_adds_missing_columns(db_manager_ctx):
-    # block_id is declared directly in create_tables()'s CREATE TABLE statement (it's
-    # universal, not per-agent) - only context columns are handled dynamically here.
-    db_manager_ctx._get_existing_columns = MagicMock(return_value={"id", "state", "block_id"})
-    db_manager_ctx._DBManager__execute_and_commit = MagicMock(return_value=0)
-    db_manager_ctx._migrate_inferences_schema()
-    executed_queries = [c.args[0] for c in db_manager_ctx._DBManager__execute_and_commit.call_args_list]
-    assert not any("block_id" in q for q in executed_queries)
-    assert any("`ctx1`" in q for q in executed_queries)
-    assert any("`ctx2`" in q for q in executed_queries)
-
-
-def test_migrate_inferences_schema_skips_existing_columns(db_manager_ctx):
-    db_manager_ctx._get_existing_columns = MagicMock(return_value={"id", "state", "block_id", "ctx1", "ctx2"})
-    db_manager_ctx._DBManager__execute_and_commit = MagicMock(return_value=0)
-    db_manager_ctx._migrate_inferences_schema()
-    db_manager_ctx._DBManager__execute_and_commit.assert_not_called()
-
-
 def test_validate_identifier_rejects_backtick():
     with pytest.raises(ValueError):
-        DBManager._validate_identifier("ctx1`; DROP TABLE agent_inferences; --")
+        DBManager._validate_identifier("block_id`; DROP TABLE agent_inferences; --")
     # Dotted PV-style names (e.g. "IPMK203.XPOS") are valid once backtick-quoted -
     # only a literal backtick is rejected.
     DBManager._validate_identifier("IPMK203.XPOS")  # should not raise
     DBManager._validate_identifier("valid_name_1")  # should not raise
-
-
-def test_create_tables_does_not_switch_database(db_manager):
-    # Regression test: create_tables() must operate on the DB connect() already
-    # selected, not create/switch to a "SMOCS_Agent_*" database.
-    db_manager.mydb.database = "original_db"
-    db_manager._DBManager__execute_and_commit = MagicMock(return_value=0)
-    db_manager._migrate_inferences_schema = MagicMock()
-    db_manager._ensure_index = MagicMock()
-    db_manager.create_tables()
-    executed_queries = [c.args[0] for c in db_manager._DBManager__execute_and_commit.call_args_list]
-    assert not any("CREATE DATABASE" in q for q in executed_queries)
-    assert db_manager.mydb.database == "original_db"
-
-
-def test_create_tables_declares_block_id_directly(db_manager):
-    # block_id is universal (not per-agent), so it's declared directly in the
-    # agent_inferences CREATE TABLE statement rather than via dynamic migration.
-    db_manager._DBManager__execute_and_commit = MagicMock(return_value=0)
-    db_manager._migrate_inferences_schema = MagicMock()
-    db_manager._ensure_index = MagicMock()
-    db_manager.create_tables()
-    executed_queries = [c.args[0] for c in db_manager._DBManager__execute_and_commit.call_args_list]
-    assert any("CREATE TABLE IF NOT EXISTS agent_inferences" in q and "block_id" in q for q in executed_queries)
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +424,7 @@ def test_sample_batch_stratifies_equally_across_blocks_in_window(db_manager_ctx)
     db_manager_ctx._get_latest_timestamp = MagicMock(return_value=datetime(2025, 8, 2, 0, 0, 0))
     # window_size=1 below, so each block's exact capacity equals its row count.
     db_manager_ctx._get_block_row_counts = MagicMock(return_value={1: 25, 2: 25, 3: 25, 4: 25})
-    fake_window = [{"state_source_timestamp": "t", "state": np.zeros(2), "ctx1": 0.0, "ctx2": 1.0}]
+    fake_window = [{"state_source_timestamp": "t", "state": np.zeros(2), "context": np.array([0.0, 1.0])}]
     db_manager_ctx._collect_windows_for_block = MagicMock(
         side_effect=lambda block_id, target_n, window_size, agent_type, mode, min_timestamp:
             [fake_window] * target_n
@@ -463,7 +447,7 @@ def test_sample_batch_redistributes_shortfall_from_thin_block(db_manager_ctx):
     # window_size=1, so block 1's true capacity is only 10, versus 50 each
     # for blocks 2-4.
     db_manager_ctx._get_block_row_counts = MagicMock(return_value={1: 10, 2: 50, 3: 50, 4: 50})
-    fake_window = [{"state_source_timestamp": "t", "state": np.zeros(2), "ctx1": 0.0, "ctx2": 1.0}]
+    fake_window = [{"state_source_timestamp": "t", "state": np.zeros(2), "context": np.array([0.0, 1.0])}]
     db_manager_ctx._collect_windows_for_block = MagicMock(
         side_effect=lambda block_id, target_n, window_size, agent_type, mode, min_timestamp:
             [fake_window] * target_n
@@ -516,7 +500,7 @@ def test_sample_batch_short_batch_logs_info(db_manager_ctx, caplog):
     # only 3 rows exist in the single block in the window, so only 3 valid
     # windows exist in total - short of the requested batch_size of 10.
     db_manager_ctx._get_block_row_counts = MagicMock(return_value={1: 3})
-    fake_window = [{"state_source_timestamp": "t", "state": np.zeros(2), "ctx1": 0.0, "ctx2": 1.0}]
+    fake_window = [{"state_source_timestamp": "t", "state": np.zeros(2), "context": np.array([0.0, 1.0])}]
     db_manager_ctx._collect_windows_for_block = MagicMock(return_value=[fake_window] * 3)
 
     with caplog.at_level(logging.INFO):
@@ -609,9 +593,9 @@ def test_collect_windows_for_block_zero_target_returns_immediately(db_manager_ct
 
 def test_build_batch_dict_shapes(db_manager_ctx):
     window = [
-        {"state_source_timestamp": "t1", "state": np.array([1.0, 2.0]), "ctx1": 0.0, "ctx2": 1.0},
-        {"state_source_timestamp": "t2", "state": np.array([3.0, 4.0]), "ctx1": 0.0, "ctx2": 1.0},
+        {"state_source_timestamp": "t1", "state": np.array([1.0, 2.0]), "context": np.array([0.0, 1.0])},
+        {"state_source_timestamp": "t2", "state": np.array([3.0, 4.0]), "context": np.array([0.0, 1.0])},
     ]
     batch = db_manager_ctx._build_batch_dict([window, window])
-    assert batch["state"].shape == (2, 2, 2)  # (batch, window_size, n_channels)
-    assert batch["ctx1"].shape == (2, 2)      # (batch, window_size)
+    assert batch["state"].shape == (2, 2, 2)    # (batch_size_eff, window_size, n_input_channels)
+    assert batch["context"].shape == (2, 2, 2)  # (batch_size_eff, window_size, n_context_channels)

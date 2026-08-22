@@ -45,19 +45,15 @@ class AgentBase(ABC):
         and unrelated to, the DBManager instances each thread establishes
         independently for sensor data storage and retrieval.
 
-        At this point in the initialization sequence, the agent's configuration has
-        not yet been loaded - subclasses load it only after invoking this base
-        class's constructor - so this connection cannot be supplied with
-        context_cols or max_gap_seconds. Those parameters are instead supplied
-        later, when the ingest, training, and inference threads establish their
-        own connections. This does not result in an inconsistent schema, since
-        create_tables() performs an idempotent, additive migration: whichever
-        connection runs it first establishes the base schema, and any connection
-        that runs it subsequently adds only what is still missing.
+        The database schema (agent_information, agent_inferences, agent_replay, and
+        every column on each - including agent_inferences' fixed, generic context
+        column) is entirely static and is provisioned once, in full, by init.sql,
+        before this agent process ever starts - see the comment beside
+        DBManager.AGENT_DATABASE_NAME for the complete rationale. No per-agent
+        schema setup is therefore needed here, or anywhere else in this class.
 
         Returns:
-            DBManager: A connected DBManager instance with the required tables
-                already ensured to exist.
+            DBManager: A connected DBManager instance.
         """
         db_config = {
             'agent_id': self.agent_id,
@@ -66,35 +62,7 @@ class AgentBase(ABC):
             'user': os.environ.get('MYSQL_USER', 'root'),
             'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
         }
-        db_manager = DBManager(db_config)
-        db_manager.create_tables()
-        return db_manager
-
-    def _ensure_sensor_schema(self):
-        """
-        Hook that allows a subclass to establish, once and in full - including any
-        per-agent context_cols columns - the database schema used for sensor data
-        storage and retrieval (the agent_inferences table), before any of the three
-        component threads are constructed.
-
-        This exists because the connection _setup_db_connection establishes, above,
-        is opened before this agent's configuration has been loaded, and therefore
-        cannot be supplied with context_cols or max_gap_seconds. By the time
-        _create_component_threads (which invokes this hook) runs, in contrast, the
-        subclass's own constructor has already loaded that configuration. Ensuring
-        the schema here, exactly once, up front, means that the ingest, training,
-        and inference threads' own DBManager connections - each established
-        independently, when that thread's __init__ runs - can rely on the full
-        schema, context columns included, already being present, and therefore have
-        no need to invoke create_tables() themselves.
-
-        The default implementation here does nothing, since AgentBase itself has no
-        notion of context_cols. Subclasses whose configuration includes a
-        model_input.context_channels entry (or an equivalent) should override this
-        method to construct a DBManager configured with that agent's actual
-        context_cols and max_gap_seconds and call create_tables() on it.
-        """
-        pass
+        return DBManager(db_config)
 
     def _prepare_agent_data(self, custom_config=None, custom_info=None):
         """
@@ -200,12 +168,6 @@ class AgentBase(ABC):
     
     def _create_component_threads(self):
         """Create the three component threads."""
-        # Ensure the full sensor-data schema - including any per-agent context
-        # columns - exists before any thread component below is constructed, so
-        # that none of those threads' own DBManager connections need to perform
-        # schema migration themselves; see _ensure_sensor_schema's docstring.
-        self._ensure_sensor_schema()
-
         # Create thread instances using abstract factory methods
         self.data_ingest_thread = self.create_data_ingest_component()
         self.ml_training_thread = self.create_ml_training_component()

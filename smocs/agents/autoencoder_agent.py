@@ -14,7 +14,6 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
-from smocs.db.mysql_api_v0 import DBManager
 from smocs.utils import ConfigLoader, ChannelFilter, setup_logging
 from smocs.preprocessing import PreprocessingManager
 
@@ -368,8 +367,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         last_training_count to the current total_samples, so it would return
         None unless a brand new row happened to arrive in that narrow window.
         That was a real, previously-observed bug: it caused eval to fail on
-        roughly half of all training cycles, each such failure leaving that
-        model version's saved metadata without an anomaly_threshold_95 value.
+        roughly half of all training cycles.
 
         Returns:
             np.ndarray or None: The batch's windows after preprocessing, or
@@ -1108,34 +1106,6 @@ class AutoencoderAgent(AgentBase):
 
         logging.info(f"AEAgent: AutoencoderAgent initialized with config: {self.agent_config}")
         logging.info(f"AEAgent: Enabled threads: {self.enabled_threads}")
-
-    def _ensure_sensor_schema(self):
-        """
-        Overrides AgentBase._ensure_sensor_schema to ensure that agent_inferences
-        already has every column this agent's context_cols requires before any of
-        the ingest, training, or inference threads are constructed - see that
-        method's docstring for why this must happen here, exactly once, rather than
-        being left to each thread's own connection.
-
-        A short-lived DBManager, configured with this agent's actual context_cols
-        and max_gap_seconds - built the same way each thread's own
-        _setup_db_connection independently builds its db_config - is opened solely
-        to run create_tables() and is closed immediately afterward; it is not
-        retained or reused for anything beyond this one migration step.
-        """
-        model_input = self.agent_config.get('model_input', {})
-        db_config = {
-            'agent_id': self.agent_id,
-            'host': os.environ.get('MYSQL_HOST', 'localhost'),
-            'port': int(os.environ.get('MYSQL_PORT', 3307)),
-            'user': os.environ.get('MYSQL_USER', 'root'),
-            'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
-            'context_cols': model_input.get('context_channels', []),
-            'max_gap_seconds': self.agent_config.get('max_gap_seconds', float('inf')),
-        }
-        db_manager = DBManager(db_config)
-        db_manager.create_tables()
-        db_manager.close()
 
     def create_data_ingest_component(self):
         """Create data ingestion thread component."""

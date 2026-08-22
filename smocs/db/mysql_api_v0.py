@@ -56,22 +56,25 @@ class DBManager:
 
         logging.debug("initializing DBConnector")
 
-        # The set of column names, on the agent_inferences table, whose values are
-        # used to stratify and group sampling - for example, columns derived from
-        # switch-state or operating-mode channels. This defaults to an empty list, so
-        # that agents which have no notion of context are entirely unaffected by this
-        # mechanism. As described further in _compute_block_id, below, block_id
-        # advances to a new value whenever any of these columns' values changes
-        # between one row and the next, in addition to advancing whenever the gap
-        # between consecutive timestamps exceeds max_gap_seconds.
-        self.context_cols = db_cfg_dict.get('context_cols', [])
+        # agent_inferences has a single, fixed 'context' BLOB column (declared
+        # directly in init.sql, always present, NULL by default) rather than any
+        # per-agent-configurable set of named columns - DBManager itself carries no
+        # config or notion of what "context" means for a given agent; it simply
+        # stores whatever numpy array, if any, a caller supplies under data['context']
+        # to record_sensor_data, and compares it against the previous row's value to
+        # help decide when to advance block_id (see _compute_block_id, below, for the
+        # complete rule, which also accounts for max_gap_seconds). An agent with no
+        # notion of context (for example, the plain, non-contextual autoencoder, or
+        # the RL control agent) simply never supplies a 'context' entry at all, in
+        # which case every row's context stays None and never contributes to block_id
+        # advancement - only max_gap_seconds-based gap detection remains active.
 
         # The maximum permitted gap, in seconds, between the timestamps of two
         # consecutively written rows before a new block_id is begun. If the calling
         # agent's configuration does not supply this value, it defaults to positive
         # infinity, which has the effect of disabling gap-based block splitting
         # entirely - under that condition, a new block can then only ever be started
-        # by a change in one of the context_cols values described above.
+        # by a change in the row's context value, as described above.
         self.max_gap_seconds = db_cfg_dict.get('max_gap_seconds', float('inf'))
 
         # An in-memory cache holding the timestamp, context values, and block_id of
@@ -197,172 +200,31 @@ class DBManager:
 
         logging.debug("CONNECTED TO DB: ", self.AGENT_DATABASE_NAME)
 
-    def create_tables(self):
-        """
-        Creates the necessary tables in the database if they do not already exist.
-        This method is called during the initialization of the DBManager to ensure that the required tables
-        for storing agent information, inferences, and replay data are present in the database.
-        It executes SQL queries to create the following tables:
-            - agent_information: Stores information about the agents.
-            - agent_inferences: Stores the inferences made by the agents.
-            - agent_replay: Stores the replay data for the agents.
-
-        These tables are created within AGENT_DATABASE_NAME - the single, fixed
-        database that connect() connects to, and which init.sql independently
-        provisions when the MySQL server itself is first started. This method does
-        not, itself, create or switch to any database; it only creates tables within
-        whichever database the existing connection is already using.
-        """
-        query = f"CREATE TABLE IF NOT EXISTS agent_information (id INT AUTO_INCREMENT PRIMARY KEY, registered_id VARCHAR(50) NOT NULL, agent_name VARCHAR(50), config BLOB, info BLOB)"
-        self.__execute_and_commit(query)
-
-        query = """
-        CREATE TABLE IF NOT EXISTS agent_inferences (id INT AUTO_INCREMENT PRIMARY KEY,
-                                                                state_source_timestamp DATETIME(6) NOT NULL,
-                                                                state_received_timestamp DATETIME(6) NOT NULL,
-                                                                state BLOB NOT NULL,
-                                                                prediction_timestamp DATETIME(6),
-                                                                prediction BLOB,
-                                                                block_id INT NOT NULL DEFAULT 0)
-        """
-        self.__execute_and_commit(query)
-
-        query = """
-        CREATE TABLE IF NOT EXISTS agent_replay (
-                                                id INT AUTO_INCREMENT PRIMARY KEY,
-                                                state_id INT NOT NULL,
-                                                action_success BOOL,
-                                                reward FLOAT NOT NULL,
-                                                next_state_source_timestamp DATETIME(6) NOT NULL,
-                                                next_state_received_timestamp DATETIME(6) NOT NULL,
-                                                next_state BLOB NOT NULL,
-                                                terminate BOOL NOT NULL,
-                                                truncate BOOL NOT NULL,
-                                                info BLOB,
-                                                FOREIGN KEY (state_id) REFERENCES agent_inferences(id)
-                                            )
-        """
-        self.__execute_and_commit(query)
-
-        # Perform an additive, idempotent migration to ensure that agent_inferences
-        # also has a column for each of this agent's configured context_cols. Note
-        # that block_id itself is not handled by this migration step; it is declared
-        # directly within the CREATE TABLE statement above, since, unlike the
-        # context columns, it is not specific to any individual agent - see
-        # _migrate_inferences_schema's docstring, for the complete explanation of
-        # this distinction.
-        self._migrate_inferences_schema()
-
-        # sample_batch filters agent_inferences directly on state_source_timestamp
-        # (the sampling_lookback window) and on block_id (per-block stratification)
-        # on every call, so both columns are indexed here to keep those lookups fast
-        # as the table grows over the agent's lifetime, rather than requiring a full
-        # table scan on every sample_batch call.
-        self._ensure_index("agent_inferences", "state_source_timestamp", "idx_state_source_timestamp")
-        self._ensure_index("agent_inferences", "block_id", "idx_block_id")
-
-    def _ensure_index(self, table_name, column_name, index_name):
-        """
-        Ensures that a plain, non-unique index named index_name exists on
-        table_name(column_name), creating it if it does not already exist.
-
-        As with _get_existing_columns, above, idempotency here is achieved by
-        first querying INFORMATION_SCHEMA (specifically, INFORMATION_SCHEMA.STATISTICS,
-        MySQL's metadata table describing every index defined on every table) rather
-        than relying on "CREATE INDEX IF NOT EXISTS" syntax, since that syntax's
-        availability differs across MySQL versions.
-
-        Args:
-            table_name (str): The table the index is to be created on.
-            column_name (str): The single column the index is to cover.
-            index_name (str): The name to give the index.
-        """
-        query = ("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.STATISTICS "
-                 "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND INDEX_NAME = %s")
-        self.db_cursor.execute(query, (self.mydb.database, table_name, index_name))
-        already_exists = self.db_cursor.fetchone()['cnt'] > 0
-        if not already_exists:
-            logging.info(f"DBManager: adding index {index_name} on {table_name}({column_name})")
-            self.__execute_and_commit(f"CREATE INDEX `{index_name}` ON {table_name} (`{column_name}`)")
-
-    def _get_existing_columns(self, table_name):
-        """
-        Determines which columns currently exist on the given table by querying
-        INFORMATION_SCHEMA.COLUMNS, MySQL's built-in metadata table describing the
-        structure of every table in every database the connected user can see.
-
-        INFORMATION_SCHEMA is queried directly here, rather than relying on the
-        `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` syntax, because that syntax's
-        availability and exact behavior differ across MySQL versions; querying
-        INFORMATION_SCHEMA and then conditionally issuing a plain `ADD COLUMN`
-        achieves the same idempotent effect in a manner that is portable across
-        versions.
-
-        Args:
-            table_name (str): The name of the table whose columns are to be listed.
-
-        Returns:
-            set: The set of column names currently present on the given table.
-        """
-        query = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s"
-        self.db_cursor.execute(query, (self.mydb.database, table_name))
-        return {row['COLUMN_NAME'] for row in self.db_cursor.fetchall()}
-
     @staticmethod
     def _validate_identifier(name):
         """
-        Rejects a proposed context column name if it contains a backtick character.
+        Rejects a proposed SQL identifier (a column name to be interpolated
+        directly into a query, such as an equality_filter key in get_timestamps)
+        if it contains a backtick character.
 
         Because column names cannot be supplied as parameterized query values in the
-        way that ordinary data values can, every context column name that appears in
-        this file is instead interpolated directly into the text of a SQL statement,
-        conventionally enclosed within a pair of backticks (for example, as
-        `` `{name}` ``). A backtick occurring within the name itself would prematurely
-        terminate that quoting and allow whatever text follows it to be interpreted
-        as additional, unintended SQL, rather than as part of the identifier. This
-        check exists solely to close off that possibility; no other character
-        restriction is imposed, since backtick-quoted identifiers in MySQL may
-        otherwise contain a wide range of characters (including, for instance, the
-        periods commonly found in PV-style channel names) without issue.
+        way that ordinary data values can, any identifier interpolated into a query
+        in this file is conventionally enclosed within a pair of backticks (for
+        example, as `` `{name}` ``). A backtick occurring within the name itself
+        would prematurely terminate that quoting and allow whatever text follows it
+        to be interpreted as additional, unintended SQL, rather than as part of the
+        identifier. This check exists solely to close off that possibility; no other
+        character restriction is imposed, since backtick-quoted identifiers in MySQL
+        may otherwise contain a wide range of characters without issue.
 
         Args:
-            name (str): The proposed context column name to validate.
+            name (str): The proposed identifier to validate.
 
         Raises:
             ValueError: If `name` contains one or more backtick characters.
         """
         if '`' in name:
-            raise ValueError(f"Invalid context column name (contains a backtick): {name!r}")
-
-    def _migrate_inferences_schema(self):
-        """
-        Ensures that agent_inferences has one column corresponding to each entry in
-        self.context_cols, adding whichever such columns are not yet present. This
-        migration is both additive (it only ever adds columns, never removes or
-        alters existing ones) and idempotent (repeated invocations against a table
-        that already has every required column have no further effect), and is
-        therefore safe to invoke unconditionally every time a DBManager instance
-        establishes its connection.
-
-        Note that block_id is deliberately not among the columns handled by this
-        method. Unlike the context columns, block_id is a single column whose name
-        and type are identical for every agent, and it is therefore declared
-        directly within the CREATE TABLE statement in create_tables(), above, rather
-        than being added dynamically here. The context columns cannot be declared
-        that way, for two reasons: first, which columns are required varies from one
-        agent's configuration to another, and second, the set of required columns
-        for a single agent may grow over that agent's lifetime - for instance, if an
-        additional entry is later added to that agent's context_channels
-        configuration. This dynamic, idempotent "add whatever is currently missing"
-        approach is what accommodates both of those forms of variability.
-        """
-        existing = self._get_existing_columns("agent_inferences")
-
-        for col in self.context_cols:
-            self._validate_identifier(col)
-            if col not in existing:
-                logging.info(f"DBManager: adding context column `{col}` to agent_inferences")
-                self.__execute_and_commit(f"ALTER TABLE agent_inferences ADD COLUMN `{col}` FLOAT")
+            raise ValueError(f"Invalid identifier (contains a backtick): {name!r}")
 
     def refresh_latest_row_cache(self):
         """
@@ -391,19 +253,20 @@ class DBManager:
 
         Returns:
             dict or None: A dictionary with keys 'timestamp', 'context' (a tuple of
-                that row's context_cols values, in self.context_cols order), and
-                'block_id', describing the most recently inserted row; or None if
-                agent_inferences currently contains no rows at all.
+                that row's decoded context values, or None if that row's context
+                column was NULL), and 'block_id', describing the most recently
+                inserted row; or None if agent_inferences currently contains no
+                rows at all.
         """
-        context_select = "".join(f", `{c}`" for c in self.context_cols)
-        query = f"SELECT state_source_timestamp, block_id{context_select} FROM agent_inferences ORDER BY id DESC LIMIT 1"
+        query = "SELECT state_source_timestamp, block_id, context FROM agent_inferences ORDER BY id DESC LIMIT 1"
         results = self._DBManager__execute_query(query)
         if not results:
             return None
         row = self.parse_results(results)[0]
+        context_value = row.get('context')
         return {
             'timestamp': self._parse_timestamp(row['state_source_timestamp']),
-            'context': tuple(row[c] for c in self.context_cols),
+            'context': tuple(context_value) if context_value is not None else None,
             'block_id': int(row['block_id']),
         }
 
@@ -429,18 +292,18 @@ class DBManager:
         """
         return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f') if isinstance(ts, str) else ts
 
-    def _compute_block_id(self, data):
+    def _compute_block_id(self, data, new_context):
         """
         Determines the block_id that should be assigned to a new row about to be
-        inserted, by comparing that row's timestamp and context values against those
+        inserted, by comparing that row's timestamp and context value against those
         of the most recently written row, as recorded in self._latest_row.
 
         A new block is begun - that is, the returned block_id is one greater than
         that of the latest row - under either of two conditions: first, if the gap
         between the new row's timestamp and the latest row's timestamp exceeds
         self.max_gap_seconds, which is taken to indicate that data collection was
-        interrupted in the interim; or second, if the new row's context values
-        differ, under exact equality, from the latest row's context values, which is
+        interrupted in the interim; or second, if the new row's context value
+        differs, under exact equality, from the latest row's context value, which is
         taken to indicate that the agent's operating context has changed. Context
         values are compared using exact equality, rather than any numerical
         tolerance, because they are assumed to already be categorical or discretized
@@ -448,11 +311,19 @@ class DBManager:
         is considered to continue the same block as the latest row, and the latest
         row's block_id is returned unchanged.
 
+        Comparing tuples here, rather than the numpy arrays context values actually
+        arrive as, is deliberate: a numpy array's `!=` is elementwise, returning
+        another array rather than a plain bool, which is exactly the kind of
+        expression that raises "truth value of an array is ambiguous" if used
+        directly in the boolean `or` below - see record_sensor_data, which converts
+        data['context'] to a tuple, once, before calling here.
+
         Args:
             data (dict): The row about to be inserted. This dictionary must contain
-                a 'state_source_timestamp' entry, and, if any context columns are
-                configured via self.context_cols, an entry for each of those columns
-                as well.
+                a 'state_source_timestamp' entry.
+            new_context (tuple or None): This row's context value, already
+                normalized to a plain tuple (or None, if this row carries no
+                context at all) by record_sensor_data.
 
         Returns:
             int: The block_id to be assigned to this row - either zero, if no prior
@@ -464,11 +335,6 @@ class DBManager:
             return 0
 
         new_ts = self._parse_timestamp(data['state_source_timestamp'])
-        new_context = tuple(data.get(c) for c in self.context_cols)
-
-        if self.context_cols and any(data.get(c) is None for c in self.context_cols):
-            missing = [c for c in self.context_cols if data.get(c) is None]
-            logging.warning(f"DBManager: record_sensor_data missing configured context_cols: {missing}")
 
         last = self._latest_row
         gap_seconds = (new_ts - last['timestamp']).total_seconds()
@@ -774,8 +640,7 @@ class DBManager:
              ...]
         """
         if agent_type.lower() != "controls":
-            context_select = "".join(f", `{c}`" for c in self.context_cols)
-            query = (f"SELECT state_source_timestamp, state, block_id{context_select} "
+            query = (f"SELECT state_source_timestamp, state, block_id, context "
                      f"FROM agent_inferences WHERE state_source_timestamp >= '{window_time_seed}' "
                      f"ORDER BY state_source_timestamp LIMIT {window_size}")
         else:
@@ -1044,11 +909,13 @@ class DBManager:
         caller, for the diagnostics case.
 
         The resulting dictionary contains the key 'state_source_timestamp', an
-        array of shape (batch, window_size); the key 'state', an array of shape
-        (batch, window_size, n_input_channels), containing input channel values
-        exclusively; and one further key for each entry in self.context_cols, each
-        such array being of shape (batch, window_size) and containing that
-        context column's value at every timestep of every window.
+        array of shape (batch_size_eff, window_size); the key 'state', an array of shape
+        (batch_size_eff, window_size, n_input_channels), containing input channel values
+        exclusively; and the key 'context', an array of shape
+        (batch_size_eff, window_size, n_context_channels) if this agent's rows carry a
+        context value, or an array of Nones of shape (batch_size_eff, window_size)
+        otherwise - callers with no notion of context (for example, the plain
+        autoencoder) simply never look at this key.
 
         Args:
             windows (list): A list of windows, each itself a list of row
@@ -1057,9 +924,9 @@ class DBManager:
 
         Returns:
             dict: A dictionary of numpy arrays, keyed as described above, with
-                'batch' in every shape description referring to len(windows).
+                'batch_size_eff' in every shape description referring to len(windows).
         """
-        keys = ['state_source_timestamp', 'state'] + list(self.context_cols)
+        keys = ['state_source_timestamp', 'state', 'context']
         batch = {k: [] for k in keys}
         for window in windows:
             for k in keys:
@@ -1160,8 +1027,8 @@ class DBManager:
         Returns:
             dict or None: None if agent_type or sampling_strategy is invalid, or
             if there isn't enough data at all (see check_sample_feasibility).
-            Otherwise a dict with 'state_source_timestamp', 'state', one array
-            per context column (diagnostics), or the controls-specific keys
+            Otherwise a dict with 'state_source_timestamp', 'state', 'context'
+            (diagnostics - see _build_batch_dict), or the controls-specific keys
             ('prediction', 'next_state', 'reward', 'terminate', 'truncate') for
             controls.
         """
@@ -1225,11 +1092,16 @@ class DBManager:
         Records sensor data into the database.
 
         block_id is computed and injected here (never supplied by the caller) by comparing
-        this row's timestamp/context_cols values against the latest previously written row -
+        this row's timestamp/context value against the latest previously written row -
         see _compute_block_id. Callers (ingest threads) stay fully agnostic of block_id.
 
         Args:
-            data (dict): A dictionary containing the sensor data to be stored. The keys should match the columns in the `agent_inferences` table.
+            data (dict): A dictionary containing the sensor data to be stored. The
+                keys should match the columns in the `agent_inferences` table. An
+                agent with a notion of context should include a 'context' entry
+                here, as a numpy array; an agent with none should simply omit it
+                (agent_inferences' context column then stores NULL for this row,
+                and this row can never trigger a context-based block_id advance).
 
         Returns:
             int: The status of the operation, 0 if successful, 1 if there was an error.
@@ -1242,14 +1114,21 @@ class DBManager:
             logging.debug("No data to store, exiting...")
             return 0
 
-        data['block_id'] = self._compute_block_id(data)
+        # Captured once, here, before the tobytes() conversion below overwrites
+        # data['context'] with its serialized form - both _compute_block_id and the
+        # latest-row cache update further down need this same plain-tuple form (see
+        # _compute_block_id's docstring for why a tuple, rather than the raw numpy
+        # array, is what must actually be compared).
+        context_value = data.get('context')
+        new_context = tuple(context_value) if context_value is not None else None
+        data['block_id'] = self._compute_block_id(data, new_context)
 
         query = f"INSERT INTO agent_inferences "
         query_columns = "("
         query_values = "("
         values = []
         for key in data:
-            if key in ['state', 'prediction'] and data[key] is not None:
+            if key in ['state', 'prediction', 'context'] and data[key] is not None:
                 data[key] = data[key].tobytes()
 
             query_columns+= f"{key}, "
@@ -1263,7 +1142,7 @@ class DBManager:
             try:
                 self._latest_row = {
                     'timestamp': self._parse_timestamp(data['state_source_timestamp']),
-                    'context': tuple(data.get(c) for c in self.context_cols),
+                    'context': new_context,
                     'block_id': data['block_id'],
                 }
             except (KeyError, ValueError) as e:

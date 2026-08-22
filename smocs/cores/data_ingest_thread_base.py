@@ -47,20 +47,14 @@ class DataIngestThreadBase(KafkaConsumerBase, ABC):
     
     def _setup_db_connection(self) -> DBManager:
         """Setup database connection for this thread."""
-        model_input = self.config.get('model_input', {})
         db_config = {
             'agent_id': self.agent_id,
             'host': os.environ.get('MYSQL_HOST', 'localhost'),
             'port': int(os.environ.get('MYSQL_PORT', 3307)),
             'user': os.environ.get('MYSQL_USER', 'root'),
             'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
-            'context_cols': model_input.get('context_channels', []),
             'max_gap_seconds': self.config.get('max_gap_seconds', float('inf')),
         }
-        # Schema (including any context_cols columns) is already fully established
-        # by the owning agent's _ensure_sensor_schema before this thread is ever
-        # constructed - see AgentBase._ensure_sensor_schema's docstring - so this
-        # connection has no need to call create_tables() itself.
         db_manager = DBManager(db_config)
         # Among the several DBManager instances an agent constructs, this particular
         # instance is the only one that ever calls record_sensor_data() - only the

@@ -71,10 +71,12 @@ class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
     column, in the same array shape and with the same semantics as in the plain
     autoencoder agent, so that downstream preprocessing of the input signal is
     unaffected by the presence of context. The context channel values, in contrast,
-    are written into their own individually named database columns, via the
-    _build_sensor_payload override defined below, so that DBManager is able to
-    query, group, and stratify sampling by those values directly at the database
-    layer, rather than needing to decode them out of an opaque state blob.
+    are written into agent_inferences' fixed, generic context column, via the
+    _build_sensor_payload override defined below, as a single array in
+    context_channels order - so that DBManager can compare a row's context against
+    the previously written row's, to help decide when to advance block_id (see
+    DBManager._compute_block_id), without needing to know what any individual
+    context value actually represents.
 
     All other behavior - the switch-function check, timestamp construction, and the
     database write itself - is inherited unchanged from AutoencoderDataIngestThread.
@@ -107,11 +109,12 @@ class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
         supplied here therefore arrive in that same order, which is what permits the
         positional slice below to separate the two groups correctly. The first
         n_input_channels values become the state array, exactly as in the base
-        class. The remaining values are paired with their corresponding names from
-        context_channels to form extra_columns, keyed by channel name so that they
-        align, one-to-one, with the context_cols configured on DBManager (which is
-        itself populated from the identical model_input.context_channels
-        configuration entry).
+        class. The remaining values become a single 'context' array, in
+        context_channels order - DBManager's agent_inferences schema has one fixed,
+        generic context column shared by every agent type (see
+        DBManager.record_sensor_data), so this order is the only thing that ties a
+        position in that array back to a specific channel name; get_training_data,
+        below, relies on this exact same context_channels order to reconstitute it.
 
         Args:
             channels: An ordered mapping from channel name to its filtered numeric
@@ -119,13 +122,14 @@ class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
 
         Returns:
             tuple: A two-element tuple of (state, extra_columns), where state
-                contains only the input channel values, and extra_columns maps each
-                context channel's name to its value.
+                contains only the input channel values, and extra_columns is
+                {'context': ...} - an array of the context channel values, in
+                context_channels order.
         """
         values = list(channels.values())
         state = np.array(values[:self.n_input_channels], dtype=np.float32)
-        extra_columns = dict(zip(self.context_channels, values[self.n_input_channels:]))
-        return state, extra_columns
+        context = np.array(values[self.n_input_channels:], dtype=np.float32)
+        return state, {'context': context}
 
 
 # ---------------------------------------------------------------------------
@@ -138,12 +142,11 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
     The 'state' array returned within sample_batch's result contains input channel
     values exclusively, in the same shape and with the same meaning as in the plain
-    autoencoder agent. Context channel values are, by contrast, stored and sampled as
-    their own individually named database columns, one per entry configured in
-    model_input.context_channels, rather than being embedded within 'state'.
-    get_training_data(), below, reconstitutes those separately-stored columns into a
-    single array of shape (batch, window, n_context) by stacking them, in the fixed
-    order given by context_channels, along a new trailing axis.
+    autoencoder agent. The 'context' array, by contrast, holds this agent's context
+    channel values, shape (batch_size_eff, window_size, n_context), already in the fixed order
+    given by context_channels - the same order _build_sensor_payload wrote them in -
+    since agent_inferences stores context as one fixed, generic array per row (see
+    DBManager.record_sensor_data), rather than as a column per context channel.
 
     get_training_data() ultimately returns one combined numpy array, formed by
     concatenating the preprocessed input windows with the preprocessed context
@@ -351,15 +354,16 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
         logging.info("CAEMLTrainingThread: Starting preprocessing pipeline...")
 
-        # 'state' contains input channel values exclusively, with shape
-        # (batch, window_size, n_input); it does not include context. Because
-        # context channel values were instead stored and sampled as separate,
-        # individually named database columns, they must be reassembled here into
-        # a single array of shape (batch, window_size, n_context) by stacking each
-        # named column, in the fixed order given by self.context_channels, along a
-        # new trailing axis.
+        # 'state' contains input channel values exclusively, shape
+        # (batch_size_eff, window_size, n_input); 'context' contains this agent's context
+        # channel values, shape (batch_size_eff, window_size, n_context), already in
+        # context_channels order - the same order _build_sensor_payload wrote them
+        # in when this data was first ingested. DBManager's agent_inferences schema
+        # stores context as one fixed, generic array per row (see
+        # DBManager.record_sensor_data), so no reassembly from separate columns is
+        # needed here, unlike when context was still one database column per channel.
         input_states = batch_data['state']
-        context_states = np.stack([batch_data[c] for c in self.context_channels], axis=-1)
+        context_states = batch_data['context']
 
         input_flattened_windows = self.preprocessing_manager.execute_pipeline(input_states)
         context_flattened_windows = self.context_preprocessing_manager.execute_pipeline(context_states)

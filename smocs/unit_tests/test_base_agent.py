@@ -18,9 +18,6 @@ class MockDBManager:
     def is_connected(self):
         return self.is_connected_result
 
-    def create_tables(self):
-        pass
-
     def refresh_latest_row_cache(self):
         pass
 
