@@ -748,16 +748,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Update instance variables from metadata
             self.input_dim = latest_info['input_dim']
 
-            # Only adopt this version's threshold if its evaluation actually
-            # produced one - eval_model() saves a dict with an 'error' key
-            # instead of 'anomaly_threshold_95' whenever evaluation itself
-            # failed (e.g. no data was available to evaluate against at that
-            # moment), and silently substituting an arbitrary hardcoded
-            # default in that case would make live anomaly detection depend
-            # on a constant that has nothing to do with this deployment's
-            # configured threshold. Keeping the previous threshold instead is
-            # strictly safer: it's already a real, previously-validated value
-            # for this same model architecture and threshold configuration.
+            # Overwrite self.anomaly_threshold only if latest_info has the relevant key; otherwise, keep previous threshold
             new_threshold = latest_info.get('eval_metrics', {}).get('anomaly_threshold_95')
             if new_threshold is not None:
                 self.anomaly_threshold = new_threshold
