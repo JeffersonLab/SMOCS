@@ -869,6 +869,24 @@ class DBManager:
         (allocates at least one unit per active block) and either exhausts the
         remaining quota or removes at least one block from consideration.
 
+        Within each round, blocks are always visited in descending block_id
+        order - largest block_id first. This matters whenever a round's quota
+        does not divide evenly across the still-active blocks (share =
+        remaining // len(active) can leave a remainder, and a batch_size of 1
+        is the extreme case of this: share is forced up to 1 by the max(1, ...)
+        below, but only one block can actually receive it): whichever block is
+        visited first within that round claims the leftover unit(s), so
+        visiting largest-to-smallest means that leftover always goes to the
+        largest block_id still in contention, rather than to whichever block_id
+        happened to occupy an arbitrary position in available_counts's own
+        iteration order (available_counts is ultimately built from a GROUP BY
+        query with no ORDER BY - see _get_block_row_counts - so that order
+        cannot itself be relied on to prioritize anything). This ordering is
+        unrelated to, and unaffected by, sample_batch's own sampling_strategy
+        argument, which only controls how windows are chosen *within* a single
+        already-allocated block, never the order in which different block_ids
+        are allocated to.
+
         Args:
             batch_size (int): The total quota to distribute.
             available_counts (dict): A mapping from block_id to the number of
@@ -883,7 +901,7 @@ class DBManager:
         """
         alloc = {b: 0 for b in available_counts}
         remaining = batch_size
-        active = [b for b, n in available_counts.items() if n > 0]
+        active = sorted([b for b, n in available_counts.items() if n > 0], reverse=True)
         while remaining > 0 and active:
             share = max(1, remaining // len(active))
             progressed = False
@@ -996,7 +1014,13 @@ class DBManager:
         possible across however many blocks are found, redistributing whatever
         share a block cannot use - for instance, because it only just began, or
         was itself too short to contain many valid windows - to the other
-        blocks that do have room for it, via a water-filling allocation. Third,
+        blocks that do have room for it, via a water-filling allocation. Ties
+        and remainders in that division always favor larger block_id values
+        first (see _allocate_with_redistribution's docstring) - for example, a
+        batch_size of 1 is always drawn from the single largest block_id
+        present, regardless of sampling_strategy, which only governs how
+        windows are chosen *within* a block, not the order blocks themselves
+        are considered in. Third,
         exactly the allocated number of windows is fetched from each block via
         _collect_windows_for_block; because get_timestamps' own candidate
         query is itself scoped to a single block (see its docstring), this
