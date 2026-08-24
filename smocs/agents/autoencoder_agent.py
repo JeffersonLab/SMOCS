@@ -13,6 +13,7 @@ from tensorflow.keras import layers
 
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
 from smocs.utils import ConfigLoader, ChannelFilter, setup_logging
+from smocs.utils.block_boundary import parse_timestamp, is_new_block
 from smocs.preprocessing import PreprocessingManager
 
 class AutoencoderDataIngestThread(DataIngestThreadBase):
@@ -711,9 +712,23 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         else:
             self.anomaly_threshold = config.get('threshold', 0.02)
 
+        # Same rule, and same config key, DBManager uses to assign block_id at
+        # insertion time (see ml_inference_thread_base.py's _setup_db_connection,
+        # which reads this identical key for its own DBManager instance) - kept
+        # in sync deliberately, so that _append_to_buffer's in-memory notion of a
+        # "block" never drifts from the one DBManager would assign to the same
+        # data. See smocs.utils.block_boundary.is_new_block for the full rule.
+        self.max_gap_seconds = config.get('max_gap_seconds', float('inf'))
+
         self.model = None
         self.input_dim = None
+        # recent_data holds this block's buffered samples only - see
+        # _append_to_buffer, which resets all three of these buffers in lockstep
+        # whenever a new block begins, so that every window later sliced from
+        # recent_data is guaranteed block-homogeneous.
         self.recent_data = []
+        self._recent_timestamps = []
+        self._recent_block_contexts = []
         self.current_model_version = None
         self.last_model_check = 0
         self.model_check_interval = config.get('model_check_interval', 30)
@@ -786,6 +801,67 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             self.load_model()
             self.last_model_check = current_time
 
+    def _append_to_buffer(self, sensor_values: np.ndarray, timestamp, block_context: Optional[Tuple] = None) -> bool:
+        """
+        Appends one new sample to the sliding-window buffer (self.recent_data),
+        first resetting that buffer - and its parallel timestamp/context buffers
+        - if this sample begins a new block relative to the most recently
+        buffered sample.
+
+        "New block" here means exactly what DBManager._compute_block_id means by
+        it: a timestamp gap exceeding self.max_gap_seconds, or a change in
+        block_context under exact equality (see
+        smocs.utils.block_boundary.is_new_block). Applying that same rule here,
+        purely in-memory, guarantees that every window later sliced from
+        self.recent_data (see perform_inference) is block-homogeneous - the
+        streaming analogue of the guarantee DBManager.sample_window enforces,
+        after the fact, for windows sampled from the database. Querying the
+        database for this sample's actual block_id instead was deliberately
+        rejected - see block_boundary.py's module docstring for why that would
+        both race the ingest thread's own write and add a needless per-message
+        round-trip.
+
+        Args:
+            sensor_values: This sample's channel values, as passed to
+                perform_inference.
+            timestamp: This sample's timestamp, in any form accepted by
+                smocs.utils.block_boundary.parse_timestamp.
+            block_context: This sample's context value for block-boundary
+                purposes only, already normalized to a plain tuple - or None,
+                for an agent with no notion of context (the case here; see
+                ContextualAutoencoderMLInferenceThread, which supplies one).
+
+        Returns:
+            bool: True once the buffer holds at least self.window_size samples
+                of the current block, meaning perform_inference now has enough
+                data to form a window; False otherwise.
+        """
+        new_timestamp = parse_timestamp(timestamp)
+
+        if self.recent_data and is_new_block(
+            self._recent_timestamps[-1], self._recent_block_contexts[-1],
+            new_timestamp, block_context, self.max_gap_seconds
+        ):
+            logging.info(f"{self.__class__.__name__}: Block boundary detected in streaming buffer "
+                         f"(gap or context change) - resetting sliding window")
+            self.recent_data = []
+            self._recent_timestamps = []
+            self._recent_block_contexts = []
+
+        self.recent_data.append(sensor_values)
+        self._recent_timestamps.append(new_timestamp)
+        self._recent_block_contexts.append(block_context)
+
+        # Trim to exactly window_size, in lockstep - perform_inference (and its
+        # contextual override) never read anything beyond the trailing
+        # window_size entries, so there is nothing to gain from retaining more.
+        if len(self.recent_data) > self.window_size:
+            self.recent_data = self.recent_data[-self.window_size:]
+            self._recent_timestamps = self._recent_timestamps[-self.window_size:]
+            self._recent_block_contexts = self._recent_block_contexts[-self.window_size:]
+
+        return len(self.recent_data) >= self.window_size
+
     def perform_inference(self, inference_request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Perform anomaly detection inference using preprocessing pipeline.
@@ -793,24 +869,19 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         try:
             # Check for model updates periodically
             self.check_for_model_updates()
-            
+
             if self.model is None:
                 self.load_model()
                 if self.model is None:
                     logging.debug("AEMLInferenceThread: No model available for inference")
                     return None
-            
+
             sensor_values = inference_request['sensor_values']
-            
-            # Add sensor values to recent data buffer
-            self.recent_data.append(sensor_values)
-            
-            # Keep buffer at reasonable size
-            if len(self.recent_data) > self.window_size * 2:
-                self.recent_data = self.recent_data[-self.window_size * 2:]
-            
-            # Need at least window_size samples for inference
-            if len(self.recent_data) < self.window_size:
+
+            # Add sensor values to the block-aware sliding-window buffer - resets
+            # on a gap or context change, so every window formed below is
+            # guaranteed block-homogeneous (see _append_to_buffer's docstring)
+            if not self._append_to_buffer(sensor_values, inference_request['timestamp']):
                 logging.debug("AEMLInferenceThread: Not enough samples to make a window for inference")
                 return None
             

@@ -5,7 +5,9 @@ __all__ = [
     "validate_topic_format",
     "validate_message_format",
     "ChannelFilter",
-    "setup_logging"
+    "setup_logging",
+    "parse_timestamp",
+    "is_new_block"
 ]
 
 def __getattr__(name):
@@ -24,4 +26,10 @@ def __getattr__(name):
     elif name == "setup_logging":
         from .logging_config import setup_logging
         return setup_logging
+    elif name == "parse_timestamp":
+        from .block_boundary import parse_timestamp
+        return parse_timestamp
+    elif name == "is_new_block":
+        from .block_boundary import is_new_block
+        return is_new_block
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

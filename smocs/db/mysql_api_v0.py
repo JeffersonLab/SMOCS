@@ -14,6 +14,8 @@ import pickle
 import re
 from datetime import datetime, timedelta
 
+from smocs.utils.block_boundary import parse_timestamp, is_new_block
+
 class DBManager:
 
     # Every agent connects to one single, fixed database name, rather than a
@@ -265,32 +267,10 @@ class DBManager:
         row = self.parse_results(results)[0]
         context_value = row.get('context')
         return {
-            'timestamp': self._parse_timestamp(row['state_source_timestamp']),
+            'timestamp': parse_timestamp(row['state_source_timestamp']),
             'context': tuple(context_value) if context_value is not None else None,
             'block_id': int(row['block_id']),
         }
-
-    @staticmethod
-    def _parse_timestamp(ts):
-        """
-        Normalizes a timestamp value into a datetime object, regardless of which of
-        two forms it currently takes: it may already be a datetime object, as
-        returned directly by the database cursor when a row is read back from the
-        database, or it may instead be a string in the exact format that
-        store_message() writes when constructing a new row prior to insertion
-        ('%Y-%m-%d %H:%M:%S.%f'). This normalization allows subsequent code to
-        perform datetime arithmetic - specifically, subtraction, to compute an
-        elapsed gap in seconds - uniformly, without needing to know which of the two
-        original forms a given timestamp happened to arrive in.
-
-        Args:
-            ts: Either a datetime object or a string formatted as
-                '%Y-%m-%d %H:%M:%S.%f'.
-
-        Returns:
-            datetime: The equivalent datetime object.
-        """
-        return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f') if isinstance(ts, str) else ts
 
     def _compute_block_id(self, data, new_context):
         """
@@ -298,25 +278,24 @@ class DBManager:
         inserted, by comparing that row's timestamp and context value against those
         of the most recently written row, as recorded in self._latest_row.
 
-        A new block is begun - that is, the returned block_id is one greater than
-        that of the latest row - under either of two conditions: first, if the gap
-        between the new row's timestamp and the latest row's timestamp exceeds
-        self.max_gap_seconds, which is taken to indicate that data collection was
-        interrupted in the interim; or second, if the new row's context value
-        differs, under exact equality, from the latest row's context value, which is
-        taken to indicate that the agent's operating context has changed. Context
-        values are compared using exact equality, rather than any numerical
-        tolerance, because they are assumed to already be categorical or discretized
-        by the time they reach the database. If neither condition holds, the new row
-        is considered to continue the same block as the latest row, and the latest
+        The actual boundary rule - a new block begins if the gap between
+        timestamps exceeds self.max_gap_seconds, or if the context value has
+        changed under exact equality - is delegated to
+        smocs.utils.block_boundary.is_new_block, rather than inlined here, since
+        AutoencoderMLInferenceThread's streaming sliding-window buffer
+        (smocs/agents/autoencoder_agent.py) applies this exact same rule,
+        in-memory, to guarantee its own windows never span a block boundary
+        either; see that function's docstring for the complete rule and the
+        rationale for sharing it. If no new block is begun, the new row is
+        considered to continue the same block as the latest row, and the latest
         row's block_id is returned unchanged.
 
         Comparing tuples here, rather than the numpy arrays context values actually
         arrive as, is deliberate: a numpy array's `!=` is elementwise, returning
         another array rather than a plain bool, which is exactly the kind of
         expression that raises "truth value of an array is ambiguous" if used
-        directly in the boolean `or` below - see record_sensor_data, which converts
-        data['context'] to a tuple, once, before calling here.
+        directly in the boolean `or` inside is_new_block - see record_sensor_data,
+        which converts data['context'] to a tuple, once, before calling here.
 
         Args:
             data (dict): The row about to be inserted. This dictionary must contain
@@ -334,14 +313,12 @@ class DBManager:
         if self._latest_row is None:
             return 0
 
-        new_ts = self._parse_timestamp(data['state_source_timestamp'])
-
+        new_ts = parse_timestamp(data['state_source_timestamp'])
         last = self._latest_row
-        gap_seconds = (new_ts - last['timestamp']).total_seconds()
-        gap_triggered = gap_seconds > self.max_gap_seconds
-        context_changed = new_context != last['context']
 
-        return last['block_id'] + 1 if (gap_triggered or context_changed) else last['block_id']
+        if is_new_block(last['timestamp'], last['context'], new_ts, new_context, self.max_gap_seconds):
+            return last['block_id'] + 1
+        return last['block_id']
 
     def register_agent(self, agent_id, agent_name, config=None, info=None):
         """
@@ -753,7 +730,7 @@ class DBManager:
         )
         if not results:
             return None
-        return self._parse_timestamp(self.parse_results(results)[0]['state_source_timestamp'])
+        return parse_timestamp(self.parse_results(results)[0]['state_source_timestamp'])
 
     def _get_block_row_counts(self, min_timestamp):
         """
@@ -1165,7 +1142,7 @@ class DBManager:
         if status == 0:
             try:
                 self._latest_row = {
-                    'timestamp': self._parse_timestamp(data['state_source_timestamp']),
+                    'timestamp': parse_timestamp(data['state_source_timestamp']),
                     'context': new_context,
                     'block_id': data['block_id'],
                 }

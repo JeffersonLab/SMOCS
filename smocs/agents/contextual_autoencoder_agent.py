@@ -579,14 +579,19 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             # sensor_values: (n_input + n_context,) in channel-filter order
             sensor_values = inference_request['sensor_values']
-            self.recent_data.append(sensor_values)
 
-            # Keep buffer at reasonable size
-            if len(self.recent_data) > self.window_size * 2:
-                self.recent_data = self.recent_data[-self.window_size * 2:]
+            # This sample's context, for block-boundary purposes only: the same
+            # context_channels values ContextualAutoencoderDataIngestThread._build_sensor_payload
+            # writes to agent_inferences' context column, compared under exact
+            # equality by _append_to_buffer/is_new_block - NOT to be confused
+            # with this class's own context-drift detection further below,
+            # which compares raw context values under context_tolerance instead.
+            block_context = tuple(sensor_values[self.n_input_channels:])
 
-            # Need at least window_size samples for inference
-            if len(self.recent_data) < self.window_size:
+            # Add sensor values to the block-aware sliding-window buffer - resets
+            # on a gap or context change, so every window formed below is
+            # guaranteed block-homogeneous (see _append_to_buffer's docstring)
+            if not self._append_to_buffer(sensor_values, inference_request['timestamp'], block_context=block_context):
                 logging.debug("CAEMLInferenceThread: Not enough samples to make a window for inference")
                 return None
 
