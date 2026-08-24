@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 from .base import BasePreprocessor
 from .registry import PreprocessingRegistry
 

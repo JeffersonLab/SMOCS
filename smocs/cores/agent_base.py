@@ -4,7 +4,7 @@ import logging
 import os
 import uuid
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict
 
 from smocs.db.mysql_api_v0 import DBManager
 

@@ -130,13 +130,8 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
     
     @abstractmethod
     def _store_inference_result(self, inference_request: Any, inference_result: Any):
-        """Store inference result to database."""
-        try:
-            # This would use DBManager to store the inference result
-            # Implementation depends on specific data structure
-            pass
-        except Exception as e:
-            logging.error(f"MLInfernceThread: Error storing inference result: {e}")
+        """Store inference result to database. Must be implemented by subclasses."""
+        pass
     
     @abstractmethod
     def load_model(self):

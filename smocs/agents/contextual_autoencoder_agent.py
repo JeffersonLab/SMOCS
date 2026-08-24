@@ -742,12 +742,12 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             model_input_channels = self.config.get('model_input', {}).get('channels', [])
             output_channels = {
                 'agent_id': self.agent_id,
-                'error_score': inference_result.get('error_score', 0.0),
-                'is_anomaly': inference_result.get('is_anomaly', False),
-                'is_drift': inference_result.get('is_drift', False),
-                'anomaly_threshold': inference_result.get('anomaly_threshold', 0.0),
-                'model_version': inference_result.get('model_version', 0),
-                'status': inference_result.get('status', 'unknown'),
+                'error_score': inference_result['error_score'],
+                'is_anomaly': inference_result['is_anomaly'],
+                'is_drift': inference_result['is_drift'],
+                'anomaly_threshold': inference_result['anomaly_threshold'],
+                'model_version': inference_result['model_version'],
+                'status': inference_result['status'],
             }
 
             most_recent_input = inference_result.get('most_recent_input')
