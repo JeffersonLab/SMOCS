@@ -182,7 +182,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         Load existing model from filesystem if available.
         Extends the base implementation to also restore context_dim.
         """
-        super().load_existing_model()  # reads metadata, validates pipeline+architecture, loads TF model, restores input_dim and last_training_count
+        super().load_existing_model()  # reads metadata, validates pipeline+architecture, loads TF model, restores input_dim and committed_last_training_count
         if self.model is not None:
             try:
                 with open("/app/models/latest_model.json", 'r') as f:
@@ -278,8 +278,8 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         """
         Retrieve raw training data from database and apply preprocessing pipeline,
         but only if new data has arrived since the last successful training round
-        (see the total_samples <= self.last_training_count check, below). This
-        gate exists specifically to stop training_loop() from retraining on data
+        (see the total_samples <= self.committed_last_training_count check, below).
+        This gate exists specifically to stop training_loop() from retraining on data
         it has already trained on; eval_model() deliberately does not go through
         this method for that reason - see _fetch_and_preprocess_batch's docstring.
 
@@ -297,17 +297,19 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             if total_samples < self.min_training_samples:
                 logging.debug(f"CAEMLTrainingThread: Not enough samples for training: {total_samples} < {self.min_training_samples}")
                 return None
-            if total_samples <= self.last_training_count:
+            if total_samples <= self.committed_last_training_count:
                 logging.debug("CAEMLTrainingThread: No new data since last training")
                 return None
 
-            logging.info(f"CAEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
+            logging.info(f"CAEMLTrainingThread: Found {total_samples - self.committed_last_training_count} new samples since last training")
 
             combined = self._fetch_and_preprocess_batch()
             if combined is None:
                 return None
 
-            self.last_training_count = total_samples
+            # Stage the candidate count; training_loop() commits it to
+            # self.committed_last_training_count only once train_model() actually succeeds.
+            self._pending_last_training_count = total_samples
 
             return combined
 
@@ -328,11 +330,11 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         to score the model against, not specifically unseen data - if it went
         through get_training_data() instead, it would be racing the very
         training_loop() call that just ran moments earlier and already bumped
-        last_training_count to the current total_samples, so it would return
+        committed_last_training_count to the current total_samples, so it would return
         None unless a brand new row happened to arrive in that narrow window.
         That was a real, previously-observed bug: it caused eval to fail on
         roughly half of all training cycles, each such failure leaving that
-        model version's saved metadata without an anomaly_threshold_95 value.
+        model version's saved metadata without an anomaly_threshold value.
 
         Returns:
             Combined array of shape (n_windows, window_size*(n_input+n_context)),
@@ -442,15 +444,15 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         get_training_data() here would be a bug, not just a stylistic difference.
 
         Returns:
-            Dict of evaluation metrics, or dict with 'error' key on failure.
+            Dict of evaluation metrics, or {'status': 'skipped', 'reason': ...} on failure.
         """
         try:
             if self.model is None:
-                return {'error': 'No model to evaluate'}
+                return {'status': 'skipped', 'reason': 'No model to evaluate'}
 
             combined = self._fetch_and_preprocess_batch()
             if combined is None:
-                return {'error': 'No evaluation data available'}
+                return {'status': 'skipped', 'reason': 'No evaluation data available'}
 
             split = self._input_split()
             n = min(100, len(combined))
@@ -466,7 +468,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
                 'mean_reconstruction_error': float(np.mean(mse_errors)),
                 'std_reconstruction_error': float(np.std(mse_errors)),
                 'max_reconstruction_error': float(np.max(mse_errors)),
-                'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
+                'anomaly_threshold': self.get_anomaly_threshold(mse_errors),
                 'eval_samples': n,
             }
 
@@ -475,7 +477,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             return eval_metrics
         except Exception as e:
             logging.error(f"CAEMLTrainingThread: Error evaluating model: {e}")
-            return {'error': str(e)}
+            return {'status': 'skipped', 'reason': str(e)}
 
 
 # ---------------------------------------------------------------------------
