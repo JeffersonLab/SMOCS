@@ -176,6 +176,31 @@ services:
     volumes:
       - mysql-data-ae2:/var/lib/mysql
 
+  linear-regression-cdc-ttod-agent:
+    extends: agent
+    profiles: ["cdc-ttod"]
+    environment:
+      AGENT_TYPE: linear_regression
+      AGENT_CONFIG: linear_regression_cdc_ttod_agent
+      SMOCS_LOG_LEVEL: INFO
+    ports:
+      - "3304:3306"
+    volumes:
+      - mysql-data-cdc-ttod:/var/lib/mysql
+
+  gp-agent1:
+    extends: agent
+    profiles: ["gp1"]
+    environment:
+      AGENT_TYPE: gp
+      AGENT_CONFIG: gp_agent1
+      SMOCS_LOG_LEVEL: INFO
+    ports:
+      - "3303:3306"
+    volumes:
+      - mysql-data-gp1:/var/lib/mysql
+      - ../models:/app/models:ro
+
   rl-control-agent1:
     extends: agent
     profiles: ["rl1"]
@@ -274,6 +299,8 @@ volumes:
   grafana-storage:
   mysql-data-ae1:
   mysql-data-ae2:
+  mysql-data-cdc-ttod:
+  mysql-data-gp1:
   mysql-data-rl1:  
   soct-configs: 
   rl-logs-1: 

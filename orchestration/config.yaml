@@ -1,161 +1,21 @@
 source: "CEBAF"
 
-mqtt:
-  topics:      
-    - topic: "bl-fermi-01-dump/blinky-hub/blinky-mqtt/flowMeter-01/reading"
-      channel_paths:
-        rate1_value: "rate1.value"
-        rate1_low: "rate1.alarm.limits.low"
-        rate1_high: "rate1.alarm.limits.high"
-        rate2_value: "rate2.value"
-        rate2_low: "rate2.alarm.limits.low"
-        rate2_high: "rate2.alarm.limits.high"
-        rate3_value: "rate3.value"
-        rate3_low: "rate3.alarm.limits.low"
-        rate3_high: "rate3.alarm.limits.high"
-      timestamp_path: "timeStamp"
-
 epics:
     source: CEBAF
     PVs:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-      - IPMK203.PHAS
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-      - IPMK101.PHAS
-      - IPMK401.XPOS
-      - IPMK401.YPOS
-      - IPMK401.PHAS
-      - IGLK100HVPSkVolts
-      - ITFHALLAMODE
-      - ITFFCupK6485correctedCur.VAL
-      
-gymnasium:
-  # Environment settings
-  environment: "Pendulum-v1"
-  render_mode: null  # Options: null, 'human', 'rgb_array'
-  max_episode_steps: null  # null uses environment default
-  
-  # Kafka topics
-  input_topic: "gymnasium-action"
-  output_topics:
-    sarsa: "gymnasium-sarsa"
-    state: "gymnasium-state"
-    decomposed: "gymnasium-output"
-  
-  # Operation mode
-  blocking_mode: false  # true = wait for Kafka actions, false = use default actions
-  default_action_strategy: "random"  # Options: 'random', 'zero'
-  step_delay: 0.0  # Delay in seconds between steps
-  reset_on_start: true  # Reset environment on startup
+      - SOL:i:BarPress2
+      - GAS:i::CDC_Temps-CDC_D1_Temp
+      - GAS:i::CDC_Temps-CDC_D3_Temp
+      - GAS:i::CDC_Temps-CDC_D4_Temp
+      - GAS:i::CDC_Temps-CDC_D5_Temp
+      - HD:coda:daq:run_number
+      - HD:coda:daq:status
+      - IBCAD00CRCUR6
 
 kafka:
   auto_create: true
   partitions: 1
   replication_factor: 1
-
-autoencoder_agent1:
-  preprocessing_pipeline:
-    - bounds_normalizer
-    - window_processor
-  window_size: 5
-  min_training_samples: 100
-  encoder_dims: [64, 32, 16]
-  learning_rate: 0.0001
-  batch_size: 16
-  samples_multiplier: 3
-  epochs: 10
-  enabled_threads: ['ingest', 'training', 'inference']
-  model_input:
-      channels:
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-      - IGLK100HVPSkVolts
-      - ITFHALLAMODE
-      - ITFFCupK6485correctedCur.VAL
-      
-      bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
-      - [10.0, 200.0]
-      - [0.0, 5.0]
-      - [0.0, 65.0]
-
-      switch: # By default switch follows "AND" operation; #TODO: Define AND, OR combination logic
-        IGLK100HVPSkVolts: 
-          greater_than: 10.0
-        ITFHALLAMODE:
-          greater_than: 0.0 
-        ITFFCupK6485correctedCur.VAL:
-          greater_than: 0.0
-      
-  model_output:
-      channels:
-      - IPMK101.XPOS
-      - IPMK101.YPOS
-
-  kafka_topics:
-    input: "CEBAF"
-    output: "autoencoder1-anomalies"
-    training_output: "autoencoder1-training-results"
-
-autoencoder_agent2:
-  preprocessing_pipeline:
-    - bounds_normalizer
-    - window_processor
-  window_size: 5
-  min_training_samples: 100
-  encoder_dims: [64, 32, 16]
-  learning_rate: 0.0001
-  batch_size: 16
-  samples_multiplier: 3
-  epochs: 10
-  enabled_threads: ['ingest', 'training', 'inference']
-  model_input:
-      channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-      
-      bounds:
-      - [-2.0, 2.0]
-      - [-2.0, 2.0]
-      
-  model_output:
-      channels:
-      - IPMK203.XPOS
-      - IPMK203.YPOS
-
-  kafka_topics:
-    input: "CEBAF"
-    output: "autoencoder2-anomalies"
-    training_output: "autoencoder2-training-results"
-
-rl_control_agent1:
-  environment: "Pendulum-v1"
-  soct_agent_type: "KerasTD3-v0"
-  soct_agent_config_path: "keras_td3.cfg"
-  buffer_type: "ER-v0"
-  buffer_size: 1000000
-  enabled_threads: ['ingest', 'training', 'inference']
-  kafka_topics:
-    input_sarsa: "gymnasium-sarsa"
-    input_state: "gymnasium-state"
-    output_action: "gymnasium-action"
-  data_ingest:
-    use_pipeline_sync: true
-    pipeline_timeout_sec: 100.0
-  training:
-    check_interval_ms: 10
-    use_pipeline_sync: true
-    pipeline_timeout_sec: 100.0
-    lock_timeout_sec: 2.0    
-  inference:
-    train_mode: true
-    use_pipeline_sync: true
-    pipeline_timeout_sec: 100.0
-    log_lock_wait_threshold_ms: 100
-  logdir: "./logs/rl_agent1"
 
 linear_regression_agent1:
   enabled_threads: ['inference']
@@ -170,30 +30,105 @@ linear_regression_agent1:
     input: "CEBAF"
     output: "linear-regression1-predictions"
 
-linear_regression_agent2:
+linear_regression_cdc_ttod_agent:
   enabled_threads: ['inference']
   model_input:
     channels:
       - SOL:i:BarPress2
-      - gas_density
+      - GAS:i::CDC_Temps-CDC_D1_Temp
+      - GAS:i::CDC_Temps-CDC_D3_Temp
+      - GAS:i::CDC_Temps-CDC_D4_Temp
+      - GAS:i::CDC_Temps-CDC_D5_Temp
+    derived_inputs:
+      cdc_pressure_over_temperature:
+        type: pressure_over_temperature
+        pressure_channel: SOL:i:BarPress2
+        temperature_channels:
+          - GAS:i::CDC_Temps-CDC_D1_Temp
+          - GAS:i::CDC_Temps-CDC_D3_Temp
+          - GAS:i::CDC_Temps-CDC_D4_Temp
+          - GAS:i::CDC_Temps-CDC_D5_Temp
+        kelvin_offset: 273.15
+        minimum_pressure: 50.0
+        maximum_pressure: 150.0
   model_output:
     channels:
-      - calib_const_a
-      - calib_const_b
+      - predicted_cdc_ttod_a1
+      - predicted_cdc_ttod_b1
+      - predicted_cdc_ttod_c1
+      - predicted_cdc_ttod_a2
+      - predicted_cdc_ttod_b2
+      - predicted_cdc_ttod_c2
   regression_parameters:
-    calib_const_a:
-      intercept: 0.0
-      coefficients:
-        SOL:i:BarPress2: 1.0
-        gas_density: 0.0
-    calib_const_b:
-      intercept: 0.0
-      coefficients:
-        SOL:i:BarPress2: 0.0
-        gas_density: 1.0
+    predicted_cdc_ttod_a1:
+      intercept: 2.0157
+      coefficients: {cdc_pressure_over_temperature: -2.9468}
+    predicted_cdc_ttod_b1:
+      intercept: -1.1960
+      coefficients: {cdc_pressure_over_temperature: 3.1979}
+    predicted_cdc_ttod_c1:
+      intercept: 0.6225
+      coefficients: {cdc_pressure_over_temperature: -1.8051}
+    predicted_cdc_ttod_a2:
+      intercept: -2.3818
+      coefficients: {cdc_pressure_over_temperature: 6.8484}
+    predicted_cdc_ttod_b2:
+      intercept: 3.1014
+      coefficients: {cdc_pressure_over_temperature: -10.5439}
+    predicted_cdc_ttod_c2:
+      intercept: -2.4503
+      coefficients: {cdc_pressure_over_temperature: 7.9724}
   kafka_topics:
     input: "CEBAF"
-    output: "linear-regression2-predictions"
+    output: "cdc-ttod-predictions"
+
+gp_agent1:
+  enabled_threads: ['inference']
+  model:
+    # Mount the model directory at /app/models in the GP agent container.
+    path: "/app/models/gp_model.joblib"
+    format: "joblib"  # Supported formats: joblib, pickle
+    version: "gp_model-v1"
+    return_std: true
+  # Order is significant and must exactly match the order used to train the model.
+  model_input:
+    channels:
+      - SOL:i:BarPress2
+      - GAS:i::CDC_Temps-CDC_D1_Temp
+      - GAS:i::CDC_Temps-CDC_D3_Temp
+      - GAS:i::CDC_Temps-CDC_D4_Temp
+      - GAS:i::CDC_Temps-CDC_D5_Temp
+  model_output:
+    name: "predicted_cdc_adc_ascale"
+  kafka_topics:
+    input: "CEBAF"
+    output: "gp1-predictions"
+
+ccdb_consumer:
+  kafka_topics:
+    - "linear-regression1-predictions"
+    - "cdc-ttod-predictions"
+    - "gp1-predictions"
+  consumer_group: "ccdb-calibration-writer-v1"
+  variation: "ceac"
+  run_end_event_type: "run_end"
+  table_assignments:
+    fdc_digi_scales:
+      path: "/FDC/digi_scales"
+      variation: "ceac"
+      rows:
+        - [predicted_fdc_gain, 0.8, 0.115]
+    cdc_drift_parameters:
+      path: "/CDC/drift_parameters"
+      variation: "ceac"
+      rows:
+        - [predicted_cdc_ttod_a1, predicted_cdc_ttod_a2, 0, predicted_cdc_ttod_b1, predicted_cdc_ttod_b2, 0, predicted_cdc_ttod_c1, predicted_cdc_ttod_c2, 0, 1.1, -0.08]
+        - [predicted_cdc_ttod_a1, {negate: predicted_cdc_ttod_a2}, 0, predicted_cdc_ttod_b1, {negate: predicted_cdc_ttod_b2}, 0, predicted_cdc_ttod_c1, {negate: predicted_cdc_ttod_c2}, 0, 1.1, -0.08]
+    cdc_digi_scales:
+      path: "/CDC/digi_scales"
+      variation: "ceac"
+      rows:
+        - [predicted_cdc_adc_ascale, 0.8]
 
 project:
   name: "smocs-gymnasium-rl-control"

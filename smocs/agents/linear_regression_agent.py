@@ -24,7 +24,9 @@ class LinearRegressionMLInferenceThread(MLInferenceThreadBase):
         model_input_config = config.get('model_input', {})
         model_output_config = config.get('model_output', {})
 
-        self.input_channels = self._resolve_input_channels(model_input_config)
+        self.raw_input_channels = self._resolve_input_channels(model_input_config)
+        self.derived_inputs = model_input_config.get('derived_inputs', {})
+        self.input_channels = list(self.derived_inputs) or list(self.raw_input_channels)
         self.input_channel = self.input_channels[0] if len(self.input_channels) == 1 else None
 
         self.output_names = self._resolve_output_names(model_output_config)
@@ -123,26 +125,47 @@ class LinearRegressionMLInferenceThread(MLInferenceThreadBase):
                 self.model = None
                 return
 
-            missing_channels = [channel for channel in self.input_channels if channel not in channels]
+            missing_channels = [channel for channel in self.raw_input_channels if channel not in channels]
             if missing_channels:
                 logging.debug(
                     f"LRInferenceThread: Skipping message from {topic}:{partition}:{offset}, missing channels {missing_channels}"
                 )
                 return None
 
-            input_values = {
+            raw_input_values = {
                 channel: float(channels[channel])
-                for channel in self.input_channels
+                for channel in self.raw_input_channels
             }
+            input_values = self._calculate_derived_inputs(raw_input_values) if self.derived_inputs else raw_input_values
 
             return {
                 'input_values': input_values,
                 'timestamp': message_data.get('timestamp', time.time()),
                 'channels': channels,
+                'run_number': message_data.get('run_number'),
             }
         except Exception as e:
             logging.error(f"LRInferenceThread: Error parsing inference request: {e}")
             return None
+
+    def _calculate_derived_inputs(self, raw_input_values: Dict[str, float]) -> Dict[str, float]:
+        """Calculate configured model features from the raw EPICS channels."""
+        input_values = {}
+        for input_name, input_config in self.derived_inputs.items():
+            if input_config.get('type') != 'pressure_over_temperature':
+                raise ValueError(f"Unsupported derived input type for {input_name}")
+
+            pressure = raw_input_values[input_config['pressure_channel']]
+            temperature_channels = input_config['temperature_channels']
+            temperatures = [raw_input_values[channel] for channel in temperature_channels]
+            temperature_kelvin = input_config.get('kelvin_offset', 273.15) + sum(temperatures) / len(temperatures)
+            if temperature_kelvin <= 0:
+                raise ValueError(f"Derived input {input_name} has non-positive temperature")
+            if not input_config.get('minimum_pressure', float('-inf')) <= pressure <= input_config.get('maximum_pressure', float('inf')):
+                raise ValueError(f"Derived input {input_name} has pressure outside its configured range")
+
+            input_values[input_name] = pressure / temperature_kelvin
+        return input_values
 
     def perform_inference(self, inference_request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Evaluate the configured linear regression equations."""
@@ -259,6 +282,8 @@ class LinearRegressionMLInferenceThread(MLInferenceThreadBase):
                 'timestamp': time.time(),
                 'channels': output_channels,
             }
+            if inference_request.get('run_number') is not None:
+                output_message['run_number'] = inference_request['run_number']
 
             kafka_topic = self.producer.sanitize_topic_name(self.output_topic)
             return True, [(kafka_topic, json.dumps(output_message))]

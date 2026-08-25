@@ -159,3 +159,41 @@ def test_linear_regression_supports_multi_input_multi_output_models():
     assert np.isclose(channels['calib_const_b'], 8.5)
     assert channels['status'] == 'success'
     thread.db_manager.record_prediction.assert_called_once()
+
+
+def test_linear_regression_calculates_cdc_ttod_coefficients_from_epics_channels():
+    config = {
+        'model_input': {
+            'channels': ['pressure', 'temp_1', 'temp_2', 'temp_3', 'temp_4'],
+            'derived_inputs': {
+                'density': {
+                    'type': 'pressure_over_temperature',
+                    'pressure_channel': 'pressure',
+                    'temperature_channels': ['temp_1', 'temp_2', 'temp_3', 'temp_4'],
+                    'kelvin_offset': 273.15,
+                    'minimum_pressure': 50.0,
+                    'maximum_pressure': 150.0,
+                }
+            },
+        },
+        'model_output': {'channels': ['a1', 'a2']},
+        'regression_parameters': {
+            'a1': {'intercept': 2.0157, 'coefficients': {'density': -2.9468}},
+            'a2': {'intercept': -2.3818, 'coefficients': {'density': 6.8484}},
+        },
+        'kafka_topics': {'input': 'CEBAF', 'output': 'cdc-results'},
+    }
+    thread = LinearRegressionMLInferenceThread('agent-cdc', config)
+    thread.db_manager.record_prediction = MagicMock(return_value=0)
+    message = {'timestamp': 10.0, 'run_number': 7, 'channels': {
+        'pressure': 100.0, 'temp_1': 20.0, 'temp_2': 20.0, 'temp_3': 20.0, 'temp_4': 20.0,
+    }}
+
+    success, outputs = thread.process_message(json.dumps(message), 'CEBAF', 0, 1)
+
+    assert success is True
+    payload = json.loads(outputs[0][1])
+    density = 100.0 / (273.15 + 20.0)
+    assert payload['run_number'] == 7
+    assert np.isclose(payload['channels']['a1'], 2.0157 - 2.9468 * density)
+    assert np.isclose(payload['channels']['a2'], -2.3818 + 6.8484 * density)
