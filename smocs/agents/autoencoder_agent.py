@@ -99,7 +99,8 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         # Model state
         self.model = None
         self.input_dim = None
-        self.last_training_count = 0
+        self.committed_last_training_count = 0
+        self._pending_last_training_count = 0
 
         # Preprocessing setup - each thread gets its own manager instance
         self.preprocessing_manager = PreprocessingManager(config)
@@ -169,12 +170,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             self.input_dim = metadata['input_dim']
             
             # Restore training state
-            self.last_training_count = metadata.get('last_training_count', 0)
-            
+            self.committed_last_training_count = metadata.get('committed_last_training_count', 0)
+
             logging.info(f"AEMLTrainingThread: Successfully loaded model v{metadata['version']}")
             logging.info(f"  Input dim: {self.input_dim}")
-            logging.info(f"  Last training count: {self.last_training_count}")
-            logging.info(f"  Will resume from sample {self.last_training_count + 1}")
+            logging.info(f"  Last training count: {self.committed_last_training_count}")
+            logging.info(f"  Will resume from sample {self.committed_last_training_count + 1}")
             
         except json.JSONDecodeError as e:
             logging.error(f"AEMLTrainingThread: Invalid model metadata JSON: {e}")
@@ -292,11 +293,11 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 return None
             
             # Check if we have new data since last training
-            if total_samples <= self.last_training_count:
+            if total_samples <= self.committed_last_training_count:
                 logging.debug("AEMLTrainingThread: No new data since last training")
                 return None
-            
-            logging.info(f"AEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
+
+            logging.info(f"AEMLTrainingThread: Found {total_samples - self.committed_last_training_count} new samples since last training")
             
             # Get consecutive sequences from database using window_size as segment_length
             batch_data = self.db_manager.sample_batch(
@@ -332,9 +333,10 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(windowed_array):.6f}")
             logging.debug(f"AEMLTrainingThread: Data std: {np.std(windowed_array):.6f}")
             
-            # Update training count
-            self.last_training_count = total_samples
-            
+            # Stage the candidate count; training_loop() commits it to
+            # self.committed_last_training_count only once train_model() actually succeeds.
+            self._pending_last_training_count = total_samples
+
             logging.info(f"AEMLTrainingThread: Successfully prepared {len(windowed_array)} training windows using preprocessing pipeline")
             return windowed_array
             
@@ -394,16 +396,15 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
     def get_anomaly_threshold(self, errors: np.ndarray) -> float:
         """
         Calculate anomaly detection threshold based on reconstruction errors.
-        
-        Args:
-            errors: Array of reconstruction errors
 
-            
+        Args:
+            errors: Array of reconstruction errors, guaranteed non-empty by callers
+                (eval_model() only reaches here once get_training_data() has
+                already confirmed a non-empty batch)
+
         Returns:
             Threshold value
         """
-        if len(errors) == 0:
-            return self.anomaly_threshold
         if self.anomaly_threshold_type == 'percentile':
             threshold = float(np.percentile(errors, self.threshold_percentile))
         else:
@@ -417,12 +418,12 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         """
         try:
             if self.model is None:
-                return {'error': 'No model to evaluate'}
-            
+                return {'status': 'skipped', 'reason': 'No model to evaluate'}
+
             # Get small batch of recent preprocessed data for evaluation
             eval_data = self.get_training_data()
             if eval_data is None:
-                return {'error': 'No evaluation data available'}
+                return {'status': 'skipped', 'reason': 'No evaluation data available'}
             
             # Use subset for evaluation
             eval_subset = eval_data[:min(100, len(eval_data))]
@@ -451,7 +452,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                         'mean_reconstruction_error': float(np.mean(mse_errors)),
                         'std_reconstruction_error': float(np.std(mse_errors)),
                         'max_reconstruction_error': float(np.max(mse_errors)),
-                        'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
+                        'anomaly_threshold': self.get_anomaly_threshold(mse_errors),
                         'eval_samples': len(eval_subset),
                         'mean_denormalized_error': float(np.mean(denorm_errors)),
                         'sample_original_range': [float(np.min(sample_original)), float(np.max(sample_original))],
@@ -463,7 +464,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                         'mean_reconstruction_error': float(np.mean(mse_errors)),
                         'std_reconstruction_error': float(np.std(mse_errors)),
                         'max_reconstruction_error': float(np.max(mse_errors)),
-                        'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
+                        'anomaly_threshold': self.get_anomaly_threshold(mse_errors),
                         'eval_samples': len(eval_subset)
                     }
                 
@@ -473,7 +474,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                     'mean_reconstruction_error': float(np.mean(mse_errors)),
                     'std_reconstruction_error': float(np.std(mse_errors)),
                     'max_reconstruction_error': float(np.max(mse_errors)),
-                    'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
+                    'anomaly_threshold': self.get_anomaly_threshold(mse_errors),
                     'eval_samples': len(eval_subset)
                 }
             
@@ -483,8 +484,8 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
             
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error evaluating model: {e}")
-            return {'error': str(e)}
-    
+            return {'status': 'skipped', 'reason': str(e)}
+
     def save_model(self, model_metrics: Dict[str, Any], eval_results: Dict[str, Any]):
         """
         Save trained model to local directory with atomic writes.
@@ -538,7 +539,7 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 'eval_metrics': eval_results,
                 'timestamp': time.time(),
                 'preprocessing_pipeline': self.preprocessing_manager.get_pipeline_info(),
-                'last_training_count': self.last_training_count  # NEW: Save training state
+                'committed_last_training_count': self.committed_last_training_count  # NEW: Save training state
             }
             
             # Save metadata to temporary file
@@ -590,17 +591,18 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
                 'training_samples': model_metrics.get('training_samples', 0),
                 'mean_reconstruction_error': eval_results.get('mean_reconstruction_error', 0.0),
                 'std_reconstruction_error': eval_results.get('std_reconstruction_error', 0.0),
-                'anomaly_threshold_95': eval_results.get('anomaly_threshold_95', 0.0),
+                'anomaly_threshold': eval_results.get('anomaly_threshold', 0.0),
                 'eval_samples': eval_results.get('eval_samples', 0),
                 'input_dim': self.input_dim or 0,
                 'window_size': self.window_size
             }
-            
-            # Add error information if present
+
+            # Add error/skip information if present
             if 'error' in model_metrics:
                 channels['training_error'] = str(model_metrics['error'])
-            if 'error' in eval_results:
-                channels['eval_error'] = str(eval_results['error'])
+            if eval_results.get('status') == 'skipped':
+                channels['eval_status'] = 'skipped'
+                channels['eval_skip_reason'] = eval_results.get('reason', '')
             
             message = {
                 'timestamp': time.time(),
@@ -623,7 +625,20 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
     
     def __init__(self, agent_id: str, config: Dict[str, Any]):
         self.window_size = config.get('window_size', 50)
-        self.anomaly_threshold = None
+
+        # 'fixed': the threshold is a static config value, known immediately - it
+        # must not wait on (or ever be overwritten by) a trained model's evaluation,
+        # since it isn't derived from data in the first place.
+        # 'percentile': the threshold is derived from evaluation data, so there is
+        # no honest value for it until the first successful evaluation lands; it
+        # stays None until then, during which is_anomaly is always False (see
+        # perform_inference()'s `if self.anomaly_threshold else False`).
+        self.anomaly_threshold_type = config.get('anomaly_threshold_type', 'fixed')
+        if self.anomaly_threshold_type == 'percentile':
+            self.anomaly_threshold = None
+        else:
+            self.anomaly_threshold = config.get('threshold', 0.02)
+
         self.model = None
         self.input_dim = None
         self.recent_data = []
@@ -672,14 +687,18 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Update instance variables from metadata
             self.input_dim = latest_info['input_dim']
 
-            # Overwrite self.anomaly_threshold only if latest_info has the relevant key; otherwise, keep previous threshold
-            new_threshold = latest_info.get('eval_metrics', {}).get('anomaly_threshold_95')
-            if new_threshold is not None:
-                self.anomaly_threshold = new_threshold
-            else:
-                logging.warning(f"AEMLInferenceThread: Model v{model_version} has no anomaly_threshold_95 in its "
-                                 f"eval_metrics ({latest_info.get('eval_metrics')}); keeping previous threshold "
-                                 f"{self.anomaly_threshold}")
+            # A 'fixed' threshold is a static config value (set once in __init__) and
+            # is never data-derived, so it must never be overwritten by whatever a
+            # model's evaluation happened to compute. Only 'percentile' mode's
+            # threshold is meant to track the latest successful evaluation.
+            if self.anomaly_threshold_type == 'percentile':
+                new_threshold = latest_info.get('eval_metrics', {}).get('anomaly_threshold')
+                if new_threshold is not None:
+                    self.anomaly_threshold = new_threshold
+                else:
+                    logging.warning(f"AEMLInferenceThread: Model v{model_version} has no anomaly_threshold in its "
+                                     f"eval_metrics ({latest_info.get('eval_metrics')}); keeping previous threshold "
+                                     f"{self.anomaly_threshold}")
 
             self.current_model_version = model_version
             
@@ -895,7 +914,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                 'agent_id': self.agent_id,
                 'error_score': inference_result.get('error_score', 0.0),
                 'is_anomaly': inference_result.get('is_anomaly', False),
-                'anomaly_threshold': inference_result.get('anomaly_threshold', 0.0),
+                'anomaly_threshold': inference_result['anomaly_threshold'],
                 'model_version': inference_result.get('model_version', 0),
                 'status': inference_result.get('status', 'unknown')
             }

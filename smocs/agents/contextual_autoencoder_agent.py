@@ -120,7 +120,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         Load existing model from filesystem if available.
         Extends the base implementation to also restore context_dim.
         """
-        super().load_existing_model()  # reads metadata, validates pipeline+architecture, loads TF model, restores input_dim and last_training_count
+        super().load_existing_model()  # reads metadata, validates pipeline+architecture, loads TF model, restores input_dim and committed_last_training_count
         if self.model is not None:
             try:
                 with open("/app/models/latest_model.json", 'r') as f:
@@ -230,11 +230,11 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             if total_samples < self.min_training_samples:
                 logging.debug(f"CAEMLTrainingThread: Not enough samples for training: {total_samples} < {self.min_training_samples}")
                 return None
-            if total_samples <= self.last_training_count:
+            if total_samples <= self.committed_last_training_count:
                 logging.debug("CAEMLTrainingThread: No new data since last training")
                 return None
 
-            logging.info(f"CAEMLTrainingThread: Found {total_samples - self.last_training_count} new samples since last training")
+            logging.info(f"CAEMLTrainingThread: Found {total_samples - self.committed_last_training_count} new samples since last training")
 
             batch_data = self.db_manager.sample_batch(
                 batch_size=self.batch_size * self.samples_multiplier,
@@ -270,7 +270,9 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             logging.debug(f"CAEMLTrainingThread: Data mean: {np.mean(combined):.6f}")
             logging.debug(f"CAEMLTrainingThread: Data std: {np.std(combined):.6f}")
 
-            self.last_training_count = total_samples
+            # Stage the candidate count; training_loop() commits it to
+            # self.committed_last_training_count only once train_model() actually succeeds.
+            self._pending_last_training_count = total_samples
 
             logging.info(f"CAEMLTrainingThread: Successfully prepared {len(combined)} training windows using preprocessing pipeline")
             return combined
@@ -333,15 +335,15 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         Evaluate the trained model.
 
         Returns:
-            Dict of evaluation metrics, or dict with 'error' key on failure.
+            Dict of evaluation metrics, or {'status': 'skipped', 'reason': ...} on failure.
         """
         try:
             if self.model is None:
-                return {'error': 'No model to evaluate'}
+                return {'status': 'skipped', 'reason': 'No model to evaluate'}
 
             combined = self.get_training_data()
             if combined is None:
-                return {'error': 'No evaluation data available'}
+                return {'status': 'skipped', 'reason': 'No evaluation data available'}
 
             split = self._input_split()
             n = min(100, len(combined))
@@ -357,7 +359,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
                 'mean_reconstruction_error': float(np.mean(mse_errors)),
                 'std_reconstruction_error': float(np.std(mse_errors)),
                 'max_reconstruction_error': float(np.max(mse_errors)),
-                'anomaly_threshold_95': self.get_anomaly_threshold(mse_errors),
+                'anomaly_threshold': self.get_anomaly_threshold(mse_errors),
                 'eval_samples': n,
             }
 
@@ -366,7 +368,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             return eval_metrics
         except Exception as e:
             logging.error(f"CAEMLTrainingThread: Error evaluating model: {e}")
-            return {'error': str(e)}
+            return {'status': 'skipped', 'reason': str(e)}
 
 
 # ---------------------------------------------------------------------------
