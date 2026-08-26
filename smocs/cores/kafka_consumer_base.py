@@ -3,9 +3,6 @@ from kafka import KafkaConsumer
 import logging
 import time
 import re
-import json
-from datetime import datetime
-from typing import Union
 
 from smocs.utils import validate_topic_format, validate_message_format
 

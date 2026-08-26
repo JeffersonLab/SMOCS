@@ -2,8 +2,7 @@ import paho.mqtt.client as mqtt
 import os
 import logging
 import json
-from typing import Dict, Any, Optional
-from pathlib import Path
+from typing import Dict, Any
 
 from smocs.cores import KafkaProducerBase
 from smocs.utils import ConfigLoader, setup_logging

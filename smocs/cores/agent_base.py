@@ -4,7 +4,7 @@ import logging
 import os
 import uuid
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict
 
 from smocs.db.mysql_api_v0 import DBManager
 
@@ -39,17 +39,31 @@ class AgentBase(ABC):
         logging.info(f"Agent {self.agent_id} ({self.agent_name}) initialized")
     
     def _setup_db_connection(self) -> DBManager:
-        """Setup database connection for agent registration."""
+        """
+        Establishes the database connection used for agent registration and status
+        tracking (the agent_information table). This connection is distinct from,
+        and unrelated to, the DBManager instances each thread establishes
+        independently for sensor data storage and retrieval.
+
+        The database schema (agent_information, agent_inferences, agent_replay, and
+        every column on each - including agent_inferences' fixed, generic context
+        column) is entirely static and is provisioned once, in full, by init.sql,
+        before this agent process ever starts - see the comment beside
+        DBManager.AGENT_DATABASE_NAME for the complete rationale. No per-agent
+        schema setup is therefore needed here, or anywhere else in this class.
+
+        Returns:
+            DBManager: A connected DBManager instance.
+        """
         db_config = {
             'agent_id': self.agent_id,
             'host': os.environ.get('MYSQL_HOST', 'localhost'),
             'port': int(os.environ.get('MYSQL_PORT', 3307)),
             'user': os.environ.get('MYSQL_USER', 'root'),
             'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
-            'database': os.environ.get('MYSQL_DATABASE', 'agentdb')
         }
         return DBManager(db_config)
-    
+
     def _prepare_agent_data(self, custom_config=None, custom_info=None):
         """
         Prepare agent data for registration.

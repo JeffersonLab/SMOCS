@@ -5,7 +5,6 @@ import logging
 import sys
 import yaml
 import json
-from pathlib import Path
 import time
 
 from smocs.cores import KafkaProducerBase

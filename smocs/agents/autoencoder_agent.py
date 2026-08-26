@@ -3,9 +3,7 @@ import glob
 import json
 import time
 import logging
-import traceback
 import numpy as np
-import pickle
 import argparse
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
@@ -912,11 +910,11 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Create base channels for output
             output_channels = {
                 'agent_id': self.agent_id,
-                'error_score': inference_result.get('error_score', 0.0),
-                'is_anomaly': inference_result.get('is_anomaly', False),
+                'error_score': inference_result['error_score'],
+                'is_anomaly': inference_result['is_anomaly'],
                 'anomaly_threshold': inference_result['anomaly_threshold'],
-                'model_version': inference_result.get('model_version', 0),
-                'status': inference_result.get('status', 'unknown')
+                'model_version': inference_result['model_version'],
+                'status': inference_result['status']
             }
             
             # Add individual channel fields for input and reconstruction

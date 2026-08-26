@@ -53,9 +53,23 @@ class DataIngestThreadBase(KafkaConsumerBase, ABC):
             'port': int(os.environ.get('MYSQL_PORT', 3307)),
             'user': os.environ.get('MYSQL_USER', 'root'),
             'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
-            'database': os.environ.get('MYSQL_DATABASE', 'agentdb')
+            'max_gap_seconds': self.config.get('max_gap_seconds', float('inf')),
         }
-        return DBManager(db_config)
+        db_manager = DBManager(db_config)
+        # Among the several DBManager instances an agent constructs, this particular
+        # instance is the only one that ever calls record_sensor_data() - only the
+        # ingest thread writes sensor data; the training and inference threads only
+        # ever read. Consequently, this is the one instance whose in-memory
+        # "latest row" cache (used to determine each new row's block_id) must be
+        # seeded from the database's actual history before any writing begins.
+        # Without this call, that cache would instead start out empty, causing the
+        # first row written after every process restart to be assigned block_id 0,
+        # as though it were the very first row this agent had ever recorded - even
+        # though rows from prior runs may already occupy that same block_id, which
+        # would corrupt the guarantee that block_id uniquely and consistently
+        # identifies a single, contiguous period of operation.
+        db_manager.refresh_latest_row_cache()
+        return db_manager
     
     def process_message(self, message, topic, partition, offset):
         """

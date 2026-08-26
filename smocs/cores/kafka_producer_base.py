@@ -1,11 +1,7 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 from kafka import KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
 import logging
-import json
-import re
-from datetime import datetime
-from typing import Union
 
 from smocs.utils import validate_topic_format, validate_message_format
 
