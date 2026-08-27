@@ -67,46 +67,78 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
     
     def training_loop(self):
         """
-        Main training loop that continuously checks for new data and trains models.
+        Main training loop that continuously checks for new data, trains, evaluates,
+        and saves models.
+
+        Training and evaluation are independent outcomes, each handled on its own:
+          - No training data available: wait and retry next cycle; nothing else runs.
+          - train_model() fails: nothing is saved or reported to Kafka, and
+            committed_last_training_count is deliberately NOT advanced - see
+            get_training_data()'s docstring - so this same data is retried on
+            the next cycle instead of being silently skipped forever.
+          - train_model() succeeds: committed_last_training_count IS advanced, and
+            eval_model() then runs regardless of what it returns.
+          - eval_model() succeeds: both training and evaluation info are saved.
+          - eval_model() fails (e.g. no fresh data to score against at that moment):
+            the newly trained model is still saved - training succeeded and is worth
+            keeping - but its eval_metrics records that evaluation was skipped this
+            cycle, rather than a stale or default threshold silently being assumed.
         """
         logging.info("MLTrainingThread: Starting training loop...")
-        
+
         while self.running:
             try:
                 logging.debug("MLTrainingThread: Checking for training data...")
-                
+
                 # Get training data from database
                 training_data = self.get_training_data()
-                
+
                 if training_data is not None:
                     logging.info(f"MLTrainingThread: Found training data with shape {training_data.shape}")
-                    
+
                     # Train model with training data
                     logging.info("MLTrainingThread: Starting model training...")
                     model_metrics = self.train_model(training_data)
                     logging.info(f"MLTrainingThread: Training completed with metrics: {model_metrics}")
-                    
+
+                    if 'error' in model_metrics:
+                        # Training failed: nothing to evaluate or save.
+                        # committed_last_training_count is intentionally left untouched -
+                        # get_training_data() only staged the candidate value in
+                        # self._pending_last_training_count, never committed it - so this
+                        # same data is considered "new" again and retried next cycle
+                        # instead of being silently skipped forever.
+                        logging.error(f"MLTrainingThread: Training failed, skipping this cycle: {model_metrics['error']}")
+                        time.sleep(30)
+                        continue
+
+                    # Training succeeded - commit the pending count only now.
+                    self.committed_last_training_count = self._pending_last_training_count
+
                     # Evaluate model
                     logging.info("MLTrainingThread: Starting model evaluation...")
                     eval_results = self.eval_model()
                     logging.info(f"MLTrainingThread: Evaluation completed: {eval_results}")
-                    
-                    # Save model to database
+
+                    # Save model - always, now that training has succeeded, regardless of
+                    # whether evaluation also succeeded; save_model() persists whatever
+                    # eval_results contains, including a "skipped" status if evaluation
+                    # itself did not succeed this cycle.
                     logging.info("MLTrainingThread: Saving model...")
                     self.save_model(model_metrics, eval_results)
-                    
+
                     # Send training results to Kafka
                     logging.info("MLTrainingThread: Sending training results to Kafka...")
                     self._send_training_results(model_metrics, eval_results)
-                    
+
                     # Sleep after successful training to avoid continuous training
                     logging.info("MLTrainingThread: Training cycle completed, sleeping...")
                     time.sleep(30)  # Wait 30 seconds before next training cycle
-                    
+
                 else:
                     logging.info("MLTrainingThread: Training data unavailable, waiting...")
                     time.sleep(30)  # Wait 30 seconds before checking again
-                    
+
             except Exception as e:
                 logging.error(f"MLTrainingThread: Error in training loop: {e}")
                 logging.error(f"MLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
@@ -136,7 +168,15 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
     def get_training_data(self) -> Optional[Any]:
         """
         Retrieve training data from database.
-        
+
+        Implementations that gate on a "new since last training" count (e.g.
+        self.committed_last_training_count) must NOT commit that count here - stash
+        the candidate value in self._pending_last_training_count instead.
+        training_loop() commits it to self.committed_last_training_count only after
+        train_model() actually succeeds. Committing it here unconditionally would
+        advance the count even when training subsequently fails, permanently
+        skipping this data instead of retrying it on the next cycle.
+
         Returns:
             Training data if available, None otherwise
         """
