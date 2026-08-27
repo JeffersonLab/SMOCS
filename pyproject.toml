@@ -23,6 +23,7 @@ dependencies = [
     "PyYAML==6.0.2",
     "gymnasium[mujoco]",
     "influxdb-client==1.38.0",
+    "uproot==5.6.8",
 ]
 
 [tool.setuptools.packages.find]

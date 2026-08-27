@@ -11,11 +11,44 @@ epics:
       - HD:coda:daq:run_number
       - HD:coda:daq:status
       - IBCAD00CRCUR6
+      - CDC:hv:A:1:v0set
+      - CDC:hv:A:1:imon
+      - CDC:hv:A:2:imon
+      - CDC:hv:A:3:imon
+      - CDC:hv:A:4:imon
+      - CDC:hv:A:5:imon
+      - CDC:hv:A:6:imon
+      - CDC:hv:A:7:imon
+      - CDC:hv:A:8:imon
+
 
 kafka:
   auto_create: true
   partitions: 1
   replication_factor: 1
+
+# Enable with the Docker Compose "root-files" profile after setting ROOT_DATA_DIR.
+# Each file is processed after it is at least minimum_file_age_seconds old. Object
+# paths follow ROOT's directory/object convention; branch is required for TTrees.
+root_file_producer:
+  directories:
+    - path: /data/root
+      recursive: true
+  topic: root-file-quantities
+  file_pattern: "*.root"
+  poll_interval_seconds: 5
+  minimum_file_age_seconds: 2
+  quantities:
+    # Histogram operations: count, sum/integral, min, max, mean, std,
+    # bin_mean, or bin_std. `count` is the number of bins; `sum` is its integral.
+    - channel: example_histogram_integral
+      object: example/histogram
+      operation: integral
+    # TTree operations: count, sum, mean, std, min, or max.
+    - channel: example_track_chi2_mean
+      object: example/tracks
+      branch: chi2
+      operation: mean
 
 linear_regression_agent1:
   enabled_threads: ['inference']
@@ -86,23 +119,114 @@ gp_agent1:
   enabled_threads: ['inference']
   model:
     # Mount the model directory at /app/models in the GP agent container.
-    path: "/app/models/gp_model.joblib"
+    path: "/app/models/gp_gcf_aiec_2018_to_2025june.joblib"
     format: "joblib"  # Supported formats: joblib, pickle
-    version: "gp_model-v1"
+    version: "gp_gcf_aiec_2018_to_2025june-v1"
     return_std: true
-  # Order is significant and must exactly match the order used to train the model.
   model_input:
-    channels:
-      - SOL:i:BarPress2
-      - GAS:i::CDC_Temps-CDC_D1_Temp
-      - GAS:i::CDC_Temps-CDC_D3_Temp
-      - GAS:i::CDC_Temps-CDC_D4_Temp
-      - GAS:i::CDC_Temps-CDC_D5_Temp
+    # The order is the trained model's feature order.
+    features:
+      - name: mean_hv_board_current
+        type: mean
+        channels:
+          - CDC:hv:A:1:imon
+          - CDC:hv:A:2:imon
+          - CDC:hv:A:3:imon
+          - CDC:hv:A:4:imon
+          - CDC:hv:A:5:imon
+          - CDC:hv:A:6:imon
+          - CDC:hv:A:7:imon
+          - CDC:hv:A:8:imon
+      - name: atmospheric_pressure
+        type: channel
+        channel: SOL:i:BarPress2
+      - name: d1_thermocouple_temperature
+        type: channel
+        channel: GAS:i::CDC_Temps-CDC_D1_Temp
   model_output:
-    name: "predicted_cdc_adc_ascale"
+    name: "gcf"
   kafka_topics:
     input: "CEBAF"
     output: "gp1-predictions"
+
+# Produces a separate Kafka stream for controlled anomaly-injection tests.
+# Populate transforms and set enabled: true to inject synthetic offsets/scales.
+epics_anomaly_injector:
+  consumer_group: "epics-anomaly-injector-v1"
+  enabled: false
+  kafka_topics:
+    input: "CEBAF"
+    output: "anomalous-epics"
+  transforms: {}
+  # Example:
+  # SOL:i:BarPress2: {add: 5.0}
+  # GAS:i::CDC_Temps-CDC_D1_Temp: {multiply: 1.1}
+
+# Uses the same model and ordered features as gp_agent1, but only consumes the
+# anomaly-injector topic so its results cannot affect the production controller.
+gp_anomalous_agent:
+  enabled_threads: ['inference']
+  model:
+    path: "/app/models/gp_gcf_aiec_2018_to_2025june.joblib"
+    format: "joblib"
+    version: "gp_gcf_aiec_2018_to_2025june-v1"
+    return_std: true
+  model_input:
+    features:
+      - name: mean_hv_board_current
+        type: mean
+        channels:
+          - CDC:hv:A:1:imon
+          - CDC:hv:A:2:imon
+          - CDC:hv:A:3:imon
+          - CDC:hv:A:4:imon
+          - CDC:hv:A:5:imon
+          - CDC:hv:A:6:imon
+          - CDC:hv:A:7:imon
+          - CDC:hv:A:8:imon
+      - name: atmospheric_pressure
+        type: channel
+        channel: SOL:i:BarPress2
+      - name: d1_thermocouple_temperature
+        type: channel
+        channel: GAS:i::CDC_Temps-CDC_D1_Temp
+  model_output:
+    name: "gcf"
+  kafka_topics:
+    input: "anomalous-epics"
+    output: "gp-anomalous-predictions"
+
+# A dedicated control-plane service consumes GP results and, only when enabled,
+# writes an EPICS HV setpoint. Keep this disabled until the mapping and limits
+# have received operational approval.
+cdc_hv_controller:
+  consumer_group: "cdc-hv-controller-v1"
+  kafka_topics:
+    input: "gp1-predictions"
+    output: "cdc-hv-control-events"
+  control:
+    enabled: false
+    setpoint_pv_template: "CDC:hv:{group}:{board}:v0set"
+    boards_by_group: {A: 8, B: 9, C: 11, D: 14, E: 17, F: 19, G: 21, H: 24, I: 26}
+    wait_for_put_completion: true
+    mapping:
+      type: gcf_quadratic
+      source: "gcf"
+      raw_source: "raw_gcf"
+      default_hv: 2125
+      ideal_gcf: null
+      uq_correction: false
+      uq_override: false
+      # 2125 V calibration curve.
+      p0: 1980.06
+      p1: 196.163
+      p2: -50.9084
+  safety:
+    # All limits are required before an enabled controller will issue a command.
+    minimum_setpoint: null
+    maximum_setpoint: null
+    maximum_prediction_stddev: null
+    minimum_command_interval_seconds: 60
 
 ccdb_consumer:
   kafka_topics:
@@ -128,7 +252,7 @@ ccdb_consumer:
       path: "/CDC/digi_scales"
       variation: "ceac"
       rows:
-        - [predicted_cdc_adc_ascale, 0.8]
+        - [gcf, 0.8]
 
 project:
-  name: "smocs-gymnasium-rl-control"
+  name: "ceac"

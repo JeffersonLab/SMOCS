@@ -78,35 +78,17 @@ services:
       SMOCS_LOG_LEVEL: INFO
     command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
 
-  mqtt-kafka-producer:
-    extends: source-kafka-producer
-    profiles: ["mqtt"]
-    environment:
-      MQTT_BROKER: ${MQTT_BROKER}
-      MQTT_PORT: ${MQTT_PORT:-1883}
-      MQTT_USERNAME: ${MQTT_USERNAME}
-      MQTT_PASSWORD: ${MQTT_PASSWORD}
-      SMOCS_LOG_LEVEL: INFO
-    command: ["python", "-m", "smocs.producers.mqtt_kafka_producer"]
+ 
 
-  gymnasium-kafka-controller:
-    build:
-      context: ../
-      dockerfile: ./orchestration/containers/gymnasium-kafka-controller/Dockerfile
-    profiles: ["gymnasium"]
-    depends_on:
-      kafka-broker:
-        condition: service_healthy
+  root-file-kafka-producer:
+    extends: source-kafka-producer
+    profiles: ["root-files"]
     environment:
-      KAFKA_BROKER_URL: kafka-broker:9092
-      KAFKA_GROUP_ID: gym-wrapper
-      CONFIG_PATH: /app/config.yaml
-      PYTHONPATH: /app
       SMOCS_LOG_LEVEL: INFO
-    networks:
-      - kafka-net
-    restart: unless-stopped
-    command: ["python", "-m", "smocs.control_plane.gymnasium_kafka_controller"]
+    volumes:
+      - ${ROOT_DATA_DIR:-./root-data}:/data/root:ro
+    command: ["python", "-m", "smocs.producers.root_file_kafka_producer"]
+
 
   influxdb-consumer:
     build:
@@ -191,6 +173,9 @@ services:
   gp-agent1:
     extends: agent
     profiles: ["gp1"]
+    build:
+      context: ../
+      dockerfile: ./orchestration/containers/agent/Dockerfile.inference
     environment:
       AGENT_TYPE: gp
       AGENT_CONFIG: gp_agent1
@@ -201,25 +186,33 @@ services:
       - mysql-data-gp1:/var/lib/mysql
       - ../models:/app/models:ro
 
-  rl-control-agent1:
+  epics-anomaly-injector:
+    extends: source-kafka-producer
+    profiles: ["anomaly-test"]
+    command: ["python", "-m", "smocs.control_plane.epics_anomaly_injector"]
+
+  gp-anomalous-agent:
     extends: agent
-    profiles: ["rl1"]
+    profiles: ["anomaly-test"]
+    build:
+      context: ../
+      dockerfile: ./orchestration/containers/agent/Dockerfile.inference
     environment:
-      AGENT_TYPE: rl_control
-      AGENT_CONFIG: rl_control_agent1
+      AGENT_TYPE: gp
+      AGENT_CONFIG: gp_anomalous_agent
       SMOCS_LOG_LEVEL: INFO
-    ports:
-      - "3308:3306"
-      - "6006:6006"  # TensorBoard port
     volumes:
-      - mysql-data-rl1:/var/lib/mysql
-      - soct-configs:/app/soct_configs:ro  # Read-only mount for soct configs
-      - ./tb-logs:/app/logs:rw  # Mount for RL agent logs and models
-    depends_on:
-      kafka-broker:
-        condition: service_healthy
-      gymnasium-kafka-controller:
-        condition: service_started
+      - mysql-data-gp-anomalous:/var/lib/mysql
+      - ../models:/app/models:ro
+
+  cdc-hv-controller:
+    extends: source-kafka-producer
+    profiles: ["cdc-hv-control"]
+    platform: linux/amd64
+    environment:
+      EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
+      SMOCS_LOG_LEVEL: INFO
+    command: ["python", "-m", "smocs.control_plane.cdc_hv_controller"]
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -237,63 +230,6 @@ services:
       kafka-broker:
         condition: service_healthy
 
-  # NOTE: Before building jlab-llm-agent or ollama-agent,
-  # first build the shared base image via the following command from the orchestration directory:
-  # docker build -t llm-agent-base:latest -f ./containers/llm-agent/Dockerfile .
-
-  ollama-agent:
-    build:
-      context: ./
-      dockerfile: ./containers/llm-agent/ollama-agent/Dockerfile
-    container_name: ollama-agent
-    profiles: ["ollama-agent"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 2
-              capabilities: [gpu]
-    environment:
-      API_TYPE: ollama
-      LLM_NAME: qwen3-coder:30b                       # good & small BUT required special parsing for tool call | qwen2.5-coder:14b-instruct ==> so many edits | qwen2.5/3:14b good but not enough | phi4:14b has no tool calling | mistral-small:24b is bad at using tools | qwen3:30b didn't yield better results
-      OLLAMA_NUM_CTX: 262144                          # This variable is prioritized over OLLAMA_CONTEXT_LENGTH if the ollama model supports it.
-      OLLAMA_CONTEXT_LENGTH: 262144
-      OLLAMA_KEEP_ALIVE: -1                           # Keep model in VRAM indefinitely between requests
-      OLLAMA_KV_CACHE_TYPE: q8_0                      # to reduce KV cache size
-      DOCUMENTATION_LINK: "https://code.jlab.org/datascience/smocs_docs/-/tree/main/docs?ref_type=heads"
-      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-    volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
-      - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
-      - ../smocs:/app/smocs:ro                        # Expose code
-      - ../orchestration:/app/orchestration:rw        # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
-      - ollama-models:/root/.ollama:rw                # To pull the LLM_NAME model only during the first run.
-    ports:
-      - "8000:8000"                               # chainlit default port is 8000. Post is mapped to access chainlit from localhost
-
-  jlab-llm-agent:
-    build:
-      context: ./
-      dockerfile: ./containers/llm-agent/jlab-llm-agent/Dockerfile
-    container_name: jlab-llm-agent
-    profiles: ["jlab-llm-agent"]
-    restart: unless-stopped
-    environment:
-      API_TYPE: openai
-      LLM_URL: "https://API.delphi.jlab.org"
-      #LLM_NAME: "openai/gpt-oss-120b"
-      #LLM_NAME: "Qwen/Qwen3-30B-A3B-Instruct-2507"
-      LLM_NAME: "google/gemma-4-31B-it"
-      DOCUMENTATION_LINK: "https://code.jlab.org/datascience/smocs_docs/-/tree/main/docs?ref_type=heads"
-      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-      API_KEY: ${API_KEY:-}
-    volumes:                                          # NOTE: Mapped volumes are not affected by "context" under "build".
-      - /var/run/docker.sock:/var/run/docker.sock     # To launch sibling sontainers
-      - ../smocs:/app/smocs:ro                        # Expose code
-      - ../orchestration:/app/orchestration:rw        # Need to edit config.yaml & docker-compose.yml. WARNING: Might edit wrong files ===> Human approval MUST be obtained to edit !!!
-    ports:
-      - "8000:8000"                               # chainlit default port is 8000. Post is mapped to access chainlit from localhost
-
 volumes:
   influxdb-data:
   grafana-storage:
@@ -301,10 +237,7 @@ volumes:
   mysql-data-ae2:
   mysql-data-cdc-ttod:
   mysql-data-gp1:
-  mysql-data-rl1:  
-  soct-configs: 
-  rl-logs-1: 
-  ollama-models: 
+  mysql-data-gp-anomalous:
 
 networks:
   kafka-net:
