@@ -29,6 +29,20 @@ def db_manager(mock_db_objects):
     return manager
 
 
+def test_connect_always_uses_agent_database_name(mock_db_objects):
+    """
+    connect() must always connect to DBManager.AGENT_DATABASE_NAME, regardless of
+    whether (or what) db_cfg supplies under 'database' - see AGENT_DATABASE_NAME's
+    docstring for why a per-agent-configurable database name is never used.
+    """
+    mock_conn, _ = mock_db_objects
+    db_cfg = {"host": "localhost", "user": "user", "pwd": "pwd", "database": "some-other-db"}
+    with patch("smocs.db.mysql_api_v0.mysql.connect", return_value=mock_conn) as mock_connect:
+        DBManager(db_cfg)
+    assert mock_connect.call_args.kwargs["database"] == DBManager.AGENT_DATABASE_NAME
+    assert mock_connect.call_args.kwargs["database"] != "some-other-db"
+
+
 def test_is_connected(db_manager, mock_db_objects):
     mock_conn, _ = mock_db_objects
     mock_conn.is_connected.return_value = True

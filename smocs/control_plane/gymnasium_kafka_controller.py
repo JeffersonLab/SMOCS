@@ -4,8 +4,7 @@ import json
 import logging
 import numpy as np
 import gymnasium as gym
-from datetime import datetime
-from typing import List, Tuple, Union, Callable, Any
+from typing import List, Tuple
 
 import smocs.control_plane
 from smocs.cores import KafkaStreamingProcessBase

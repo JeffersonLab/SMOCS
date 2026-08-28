@@ -14,6 +14,21 @@ import pickle
 
 class DBManager:
 
+    # Every agent connects to one single, fixed database name, rather than a
+    # per-agent-configurable one. This is intentional, not an oversight: init.sql
+    # unconditionally creates a database with this exact name (via
+    # "CREATE DATABASE IF NOT EXISTS agentdb") when the containing MySQL server is
+    # first provisioned, so any other value supplied here would simply fail to
+    # connect, since no database by that alternate name would exist. Furthermore,
+    # each agent is deployed with its own independent MySQL server process and its
+    # own dedicated storage volume (see the orchestration/docker-compose.yml service
+    # definitions), so no two agents ever share a single server in the first place;
+    # consequently, there has never been a genuine need to distinguish between
+    # agents by database name. Should per-agent database names become necessary in
+    # the future, that should be undertaken as a dedicated, separate change, since it
+    # would additionally require modifying init.sql to accept a configurable name.
+    AGENT_DATABASE_NAME = "agentdb"
+
     # Function to connect with db
     def __init__(self, db_cfg_dict):
         """
@@ -36,11 +51,9 @@ class DBManager:
             Initializing DBConnector
             Connected to DB: my_database
         """
-        
-        #self.db_name = f"SMOCS_Agent_{db_cfg_dict['database']}"
-        self.db_name = db_cfg_dict['database']
+
         logging.debug("initializing DBConnector")
-        
+
         self.connect(db_cfg_dict)
 
     def is_connected(self):
@@ -108,9 +121,17 @@ class DBManager:
 
         """
         Establishes a connection to the MySQL database using the provided configuration.
+
+        The database connected to is always AGENT_DATABASE_NAME; it is not read from
+        db_config, and no value supplied within db_config can override it. See the
+        explanatory comment beside the AGENT_DATABASE_NAME class attribute, above, for
+        the complete rationale.
+
         Args:
-            db_config (dict): A dictionary containing the database connection parameters such as host, user,
-                                password, and database name.
+            db_config (dict): A dictionary containing the database connection
+                parameters - specifically, the host, user, and password. This
+                dictionary is not expected to, and need not, contain the database
+                name itself.
             n_connection_trials (int): The number of attempts to connect to the database before giving up.
         Raises:
             Exception: If the connection fails after the specified number of trials, an exception is raised and
@@ -118,14 +139,14 @@ class DBManager:
         Returns:
             None
         """
-        
+
         for i in range(n_connection_trials):
             try:
                 logging.debug("Connecting to DB - trial ", i)
-                self.mydb = mysql.connect(host=db_config["host"], 
-                                username=db_config["user"], 
-                                password=db_config["pwd"], 
-                                database=db_config["database"],
+                self.mydb = mysql.connect(host=db_config["host"],
+                                username=db_config["user"],
+                                password=db_config["pwd"],
+                                database=self.AGENT_DATABASE_NAME,
                                 autocommit=True)
 
                 self.db_cursor = self.mydb.cursor(dictionary=True)
@@ -138,52 +159,7 @@ class DBManager:
                 logging.debug("ERROR: CANNOT CONNECT TO DATABASE, WAITING 5 sec...")
                 time.sleep(5)
 
-        logging.debug("CONNECTED TO DB: ", db_config['database'])
-
-    def create_tables(self):
-        """
-        Creates the necessary tables in the database if they do not already exist.
-        This method is called during the initialization of the DBManager to ensure that the required tables
-        for storing agent information, inferences, and replay data are present in the database.
-        It executes SQL queries to create the following tables:
-            - agent_information: Stores information about the agents.
-            - agent_inferences: Stores the inferences made by the agents.
-            - agent_replay: Stores the replay data for the agents.
-        If the database does not exist, it will be created first.
-        """
-        query = f"CREATE DATABASE IF NOT EXISTS {self.db_name}"
-        self.__execute_and_commit(query)
-        self.mydb.database = self.db_name
-
-        query = f"CREATE TABLE IF NOT EXISTS agent_information (id INT AUTO_INCREMENT PRIMARY KEY, registered_id VARCHAR(50) NOT NULL, agent_name VARCHAR(50), config BLOB, info BLOB)"
-        self.__execute_and_commit(query)
-
-        query = """
-        CREATE TABLE IF NOT EXISTS agent_inferences (id INT AUTO_INCREMENT PRIMARY KEY, 
-                                                                state_source_timestamp DATETIME(6) NOT NULL, 
-                                                                state_received_timestamp DATETIME(6) NOT NULL,
-                                                                state BLOB NOT NULL, 
-                                                                prediction_timestamp DATETIME(6), 
-                                                                prediction BLOB)
-        """
-        self.__execute_and_commit(query)
-
-        query = """
-        CREATE TABLE IF NOT EXISTS agent_replay (
-                                                id INT AUTO_INCREMENT PRIMARY KEY,
-                                                state_id INT NOT NULL,
-                                                action_success BOOL,
-                                                reward FLOAT NOT NULL,
-                                                next_state_source_timestamp DATETIME(6) NOT NULL,
-                                                next_state_received_timestamp DATETIME(6) NOT NULL,
-                                                next_state BLOB NOT NULL,
-                                                terminate BOOL NOT NULL,
-                                                truncate BOOL NOT NULL,
-                                                info, BLOB,
-                                                FOREIGN KEY (state_id) REFERENCES agent_inferences(id)
-                                            )
-        """
-        self.__execute_and_commit(query)
+        logging.debug("CONNECTED TO DB: ", self.AGENT_DATABASE_NAME)
 
     def register_agent(self, agent_id, agent_name, config=None, info=None):
         """

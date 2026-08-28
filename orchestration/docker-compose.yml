@@ -139,10 +139,15 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BROKER_URL: kafka-broker:9092
-      MYSQL_HOST: ${MYSQL_HOST}  
+      MYSQL_HOST: ${MYSQL_HOST}
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
-      #MYSQL_DATABASE: ${MYSQL_DATABASE}    # Commenting to enable _setup_db_connection in agent_base to set it to its default value of "agentdb" which is hardcoded in init.sql. Will eventually be completely removed since there is no need to set a configurable database name for the agent. The agent will always use "agentdb" as the database name.
+      # Deliberately no MYSQL_DATABASE variable here: init.sql unconditionally creates a
+      # single, fixed database named "agentdb" (see also DBManager.AGENT_DATABASE_NAME
+      # in smocs/db/mysql_api_v0.py, which connects to that same fixed name). Because
+      # every agent runs its own isolated MySQL server in its own container, with its
+      # own dedicated volume, there has never been a scenario requiring a distinct
+      # database name per agent, so no such variable is defined or consumed.
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CONFIG_PATH: /app/config.yaml
       PYTHONPATH: /app

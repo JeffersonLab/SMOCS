@@ -43,7 +43,6 @@ class MLTrainingThreadBase(KafkaProducerBase, ABC):
             'port': int(os.environ.get('MYSQL_PORT', 3307)),
             'user': os.environ.get('MYSQL_USER', 'root'),
             'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
-            'database': os.environ.get('MYSQL_DATABASE', 'agentdb')
         }
         return DBManager(db_config)
     

@@ -8,18 +8,16 @@ os.environ.setdefault('MYSQL_HOST', 'localhost')
 os.environ.setdefault('MYSQL_PORT', '3307')
 os.environ.setdefault('MYSQL_USER', 'root')
 os.environ.setdefault('MYSQL_ROOT_PASSWORD', 'test_password')
-os.environ.setdefault('MYSQL_DATABASE', 'test_db')
 os.environ.setdefault('KAFKA_BROKER_URL', 'test-broker:9092')
 
 # Create a complete mock for DBManager
 class MockDBManager:
     def __init__(self, db_config):
         self.is_connected_result = True
-        self.db_name = f"SMOCS_Agent_{db_config['database']}"
-    
+
     def is_connected(self):
         return self.is_connected_result
-    
+
     def close(self):
         pass
 
