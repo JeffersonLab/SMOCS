@@ -297,46 +297,46 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
 
             logging.info(f"AEMLTrainingThread: Found {total_samples - self.committed_last_training_count} new samples since last training")
             
-            # Get consecutive windows from database, each of length window_size
+            # Get consecutive sequences from database using window_size as segment_length
             batch_data = self.db_manager.sample_batch(
                 batch_size=self.batch_size * self.samples_multiplier,
-                window_size=self.window_size,
+                segment_length=self.window_size,
                 agent_type="diagnostics",
                 mode="latest"
             )
-
-            logging.info(f"AEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
-
+            
+            logging.info(f"AEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
+            
             if batch_data is None or len(batch_data['state']) == 0:
                 logging.warning("AEMLTrainingThread: No batch data returned from database")
                 return None
-
+            
             # Execute preprocessing pipeline
             logging.info("AEMLTrainingThread: Starting preprocessing pipeline...")
-
+            
             try:
-                flattened_windows = self.preprocessing_manager.execute_pipeline(batch_data['state'])
-
-                if flattened_windows is None or len(flattened_windows) == 0:
+                windowed_array = self.preprocessing_manager.execute_pipeline(batch_data['state'])
+                
+                if windowed_array is None or len(windowed_array) == 0:
                     logging.error("AEMLTrainingThread: No valid windows created by preprocessing pipeline")
                     return None
-
+                    
             except Exception as pipeline_error:
                 logging.error(f"AEMLTrainingThread: Preprocessing pipeline failed: {pipeline_error}")
                 return None
-
+            
             # Log final statistics
-            logging.info(f"AEMLTrainingThread: Final flattened windows shape: {flattened_windows.shape}")
-            logging.debug(f"AEMLTrainingThread: Data range: [{np.min(flattened_windows):.6f}, {np.max(flattened_windows):.6f}]")
-            logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(flattened_windows):.6f}")
-            logging.debug(f"AEMLTrainingThread: Data std: {np.std(flattened_windows):.6f}")
-
+            logging.info(f"AEMLTrainingThread: Final windowed data shape: {windowed_array.shape}")
+            logging.debug(f"AEMLTrainingThread: Data range: [{np.min(windowed_array):.6f}, {np.max(windowed_array):.6f}]")
+            logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(windowed_array):.6f}")
+            logging.debug(f"AEMLTrainingThread: Data std: {np.std(windowed_array):.6f}")
+            
             # Stage the candidate count; training_loop() commits it to
             # self.committed_last_training_count only once train_model() actually succeeds.
             self._pending_last_training_count = total_samples
 
-            logging.info(f"AEMLTrainingThread: Successfully prepared {len(flattened_windows)} training windows using preprocessing pipeline")
-            return flattened_windows
+            logging.info(f"AEMLTrainingThread: Successfully prepared {len(windowed_array)} training windows using preprocessing pipeline")
+            return windowed_array
             
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
@@ -743,15 +743,15 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             # Create inference window using preprocessing pipeline
             try:
                 # Get the most recent window_size samples
-                current_window = [self.recent_data[-self.window_size:]]
-
+                current_sequence = [self.recent_data[-self.window_size:]]
+                
                 # Execute preprocessing pipeline (handles normalization, windowing, etc.)
-                flattened_windows = self.preprocessing_manager.execute_pipeline(current_window)
-
-                if len(flattened_windows) == 0:
+                window_data = self.preprocessing_manager.execute_pipeline(current_sequence)
+                
+                if len(window_data) == 0:
                     raise ValueError("No valid windows created by preprocessing pipeline")
-
-                flattened_window = flattened_windows[0:1]  # Get first (and only) window as batch
+                
+                flattened_window = window_data[0:1]  # Get first (and only) window as batch
                 
             except Exception as pipeline_error:
                 logging.error(f"AEMLInferenceThread: Preprocessing pipeline failed: {pipeline_error}")

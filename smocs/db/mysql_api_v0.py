@@ -387,29 +387,29 @@ class DBManager:
         parsed_results = self.parse_results(results)
         return parsed_results
       
-    def sample_window(self, window_time_seed, agent_type, window_size):
+    def sample_sequence(self, window_time_seed, agent_type, segment_length):
         """
-        Samples a window of data from the database starting from a given timestamp.
+        Samples a sequence of data from the database starting from a given timestamp.
         Args:
-            window_time_seed (str): The starting timestamp for the window.
-            agent_type (str): The type of agent for which the window is being sampled.
-            window_size (int): The length of the window to be sampled.
+            window_time_seed (str): The starting timestamp for the sequence.
+            agent_type (str): The type of agent for which the sequence is being sampled.
+            segment_length (int): The length of the segment to be sampled.
         Returns:
             list: A list of dictionaries containing the sampled data for the specified agent type.
         Raises:
             Exception: If there is an error executing the query, it will logging.debug the error message and return None.
         Example:
-            >>> window = self.sample_window(window_time_seed='2023-10-01 12 :00:00', agent_type='diagnostics', window_size=10)
-            >>> logging.debug(window)
+            >>> sequence = self.sample_sequence(window_time_seed='2023-10-01 12 :00:00', agent_type='diagnostics', segment_length=10)
+            >>> logging.debug(sequence)
             [{'state_source_timestamp': '2023-10-01 12:00:00', 'state': array([0.1, 0.2])},
              {'state_source_timestamp': '2023-10-01 12:00:01', 'state': array([0.3, 0.4])},
              ...]
         """
         if agent_type.lower() != "controls":
-            # query = f"SELECT ai.state_source_timestamp, ai.state, ar.next_state FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {window_size}"
-            query = f"SELECT state_source_timestamp, state FROM agent_inferences WHERE state_source_timestamp >= '{window_time_seed}' ORDER BY state_source_timestamp LIMIT {window_size}"
+            # query = f"SELECT ai.state_source_timestamp, ai.state, ar.next_state FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {segment_length}"
+            query = f"SELECT state_source_timestamp, state FROM agent_inferences WHERE state_source_timestamp >= '{window_time_seed}' ORDER BY state_source_timestamp LIMIT {segment_length}"
         else:
-            query = f"SELECT ai.state_source_timestamp, ai.state, ai.prediction, ar.next_state, ar.reward, ar.truncate, ar.terminate FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {window_size}"
+            query = f"SELECT ai.state_source_timestamp, ai.state, ai.prediction, ar.next_state, ar.reward, ar.truncate, ar.terminate FROM agent_inferences ai JOIN agent_replay ar ON ai.Id = ar.state_id WHERE ai.state_source_timestamp >= '{window_time_seed}' ORDER BY ai.state_source_timestamp LIMIT {segment_length}"
 
         try:
             self.db_cursor.execute(query)
@@ -423,12 +423,12 @@ class DBManager:
             
         return parsed_results
     
-    def check_sample_feasibility(self, window_size, agent_type):
+    def check_sample_feasibility(self, segment_length, agent_type):
         """
-        Checks if there are enough samples in the database to sample a batch of the specified window size.
+        Checks if there are enough samples in the database to sample a batch of the specified segment length.
 
         Args:
-            window_size (int): The length of the window to be sampled.
+            segment_length (int): The length of the segment to be sampled.
             agent_type (str): The type of agent for which the samples are being checked.
 
         Returns:
@@ -437,35 +437,35 @@ class DBManager:
         Raises:
             None: If the agent_type is not recognized, it returns False.
         Example:
-            >>> success = self.check_sample_feasibility(window_size=10, agent_type='diagnostics')
+            >>> success = self.check_sample_feasibility(segment_length=10, agent_type='diagnostics')
             >>> logging.debug(success)
             True
         """
         success = True
         number_of_records_prediction_table = self.get_size(table_name="agent_inferences")
-        if number_of_records_prediction_table < window_size:
-            logging.debug("Number of records in prediction table is less than window size. Cannot sample batch, waiting for more data to be recorded...")
+        if number_of_records_prediction_table < segment_length:
+            logging.debug("Number of records in prediction table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
             success = False
-
+        
         if agent_type.lower() == "controls":
             number_of_records_replay_table = self.get_size(table_name="agent_replay")
-            if number_of_records_replay_table < window_size:
-                logging.debug("Number of records in replay table is less than window size. Cannot sample batch, waiting for more data to be recorded...")
+            if number_of_records_replay_table < segment_length:
+                logging.debug("Number of records in replay table is less than segment length. Cannot sample batch, waiting for more data to be recorded...")
                 success = False
-
+        
         return success
  
-    def sample_batch(self, batch_size, window_size, agent_type, mode="random"):
-        # Select n random timestamps as starting point for windows
+    def sample_batch(self, batch_size, segment_length, agent_type, mode="random"):
+        # Select n random timestamps as starting point for sequences
         """
         Samples a batch of data from the database based on the specified parameters.
 
         Args:
             batch_size (int): The number of samples to be included in the batch.
-            window_size (int): The length of each window to be sampled.
+            segment_length (int): The length of each segment to be sampled.
             agent_type (str): The type of agent for which the batch is being sampled. Valid
                 values are 'controls' or 'diagnostics'.
-            mode (str): The mode of sampling, either 'random' or 'latest'. Defaults to 'random'.
+            mode (str): The mode of sampling, either 'random' or 'latest'. Defaults to 'random'.   
 
 
         Raises:
@@ -477,11 +477,11 @@ class DBManager:
         if agent_type.lower() not in ["controls", "diagnostics"]:
             logging.debug(f"Invalid agent_type: {agent_type}. Valid values are 'controls' or 'diagnostics'.")
             return None
-
-        if not self.check_sample_feasibility(window_size, agent_type):
+        
+        if not self.check_sample_feasibility(segment_length, agent_type):
             logging.debug("Not enough samples in the database to sample a batch.")
             return None
-
+        
         batch = {'state_source_timestamp': [],
                               'state': []}
         if agent_type.lower() == "controls":
@@ -492,29 +492,29 @@ class DBManager:
             batch['truncate'] = []
 
         required_samples = batch_size
-
+        
         while required_samples > 0:
-            timestamps = self.get_timestamps(window_size=window_size,
+            timestamps = self.get_timestamps(window_size=segment_length,
                                             mode=mode,
                                             n=required_samples,
                                             agent_type=agent_type)
             for result in timestamps:
                 window_seed = result['state_source_timestamp']
-                results = self.sample_window(window_time_seed=window_seed,
+                results = self.sample_sequence(window_time_seed=window_seed,
                                                agent_type=agent_type,
-                                               window_size=window_size)
-
+                                               segment_length=segment_length)
+                
                 if results is None:
                     raise ValueError("No results found for the given window seed.")
-
+                                
                 for key in batch:
                     batch[key].append([results[i][key] for i in range(len(results))])
             key = list(batch.keys())[0]
             required_samples = required_samples - len(batch[key])
-
+            
         for key in batch:
             batch[key] = np.array(batch[key])
-
+        
         return batch
 
     def record_sensor_data(self, data):
