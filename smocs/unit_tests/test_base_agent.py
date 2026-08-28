@@ -18,6 +18,9 @@ class MockDBManager:
     def is_connected(self):
         return self.is_connected_result
 
+    def refresh_latest_row_cache(self):
+        pass
+
     def close(self):
         pass
 
