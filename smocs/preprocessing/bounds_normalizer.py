@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-from typing import List, Dict, Any
+from typing import Dict, Any
 from .base import BasePreprocessor
 from .registry import PreprocessingRegistry
 
@@ -42,7 +42,7 @@ class BoundsNormalizer(BasePreprocessor):
             data: Input data to normalize - supports:
                   - 1D: single sample (n_features,)
                   - 2D: multiple samples (n_samples, n_features) or flattened windows
-                  - 3D: sequences (n_sequences, sequence_length, n_features) - from database
+                  - 3D: windows (n_windows, window_size, n_features) - from database
             **kwargs: Additional parameters (unused currently)
             
         Returns:
@@ -63,17 +63,17 @@ class BoundsNormalizer(BasePreprocessor):
                 normalized_data = self._normalize_sample(data)
                 
             elif data.ndim == 2:
-                # Multiple samples or windowed data
+                # Multiple samples or flattened windows
                 if data.shape[1] == len(self.bounds):
                     # Each column corresponds to a channel
                     normalized_data = np.array([self._normalize_sample(sample) for sample in data])
                 else:
-                    # Windowed data - need to handle differently
-                    normalized_data = self._normalize_windowed_data(data)
-                    
+                    # Flattened windows - need to handle differently
+                    normalized_data = self._normalize_flattened_windows(data)
+
             elif data.ndim == 3:
-                # 3D data from database: (n_sequences, sequence_length, n_features)
-                normalized_data = self._normalize_3d_sequences(data)
+                # 3D data from database: (n_windows, window_size, n_features)
+                normalized_data = self._normalize_3d_windows(data)
                 
             else:
                 raise ValueError(f"BoundsNormalizer: Unsupported data dimensionality: {data.ndim}")
@@ -91,38 +91,38 @@ class BoundsNormalizer(BasePreprocessor):
             logging.error(f"BoundsNormalizer: Error normalizing data: {e}")
             raise
     
-    def _normalize_3d_sequences(self, sequences: np.ndarray) -> np.ndarray:
+    def _normalize_3d_windows(self, windows: np.ndarray) -> np.ndarray:
         """
-        Normalize 3D sequence data from database.
-        
+        Normalize 3D window data from database.
+
         Args:
-            sequences: Array of shape (n_sequences, sequence_length, n_features)
-            
+            windows: Array of shape (n_windows, window_size, n_features)
+
         Returns:
-            Normalized sequences with same shape
+            Normalized windows with same shape
         """
-        n_sequences, sequence_length, n_features = sequences.shape
-        
-        logging.debug(f"BoundsNormalizer: Processing 3D sequences: {n_sequences} sequences, {sequence_length} timesteps, {n_features} features")
-        
+        n_windows, window_size, n_features = windows.shape
+
+        logging.debug(f"BoundsNormalizer: Processing 3D windows: {n_windows} windows, {window_size} timesteps, {n_features} features")
+
         # Validate feature count matches bounds
         if n_features != len(self.bounds):
             raise ValueError(f"BoundsNormalizer: Number of features ({n_features}) doesn't match number of bounds ({len(self.bounds)})")
-        
-        # Normalize each sequence
-        normalized_sequences = np.zeros_like(sequences)
-        
-        for seq_idx in range(n_sequences):
-            sequence = sequences[seq_idx]  # Shape: (sequence_length, n_features)
-            
-            # Normalize each timestep in the sequence
-            for t in range(sequence_length):
-                timestep = sequence[t]  # Shape: (n_features,)
-                normalized_sequences[seq_idx, t] = self._normalize_sample(timestep)
-        
-        logging.debug(f"BoundsNormalizer: Normalized {n_sequences} sequences")
-        
-        return normalized_sequences
+
+        # Normalize each window
+        normalized_windows = np.zeros_like(windows)
+
+        for window_idx in range(n_windows):
+            window = windows[window_idx]  # Shape: (window_size, n_features)
+
+            # Normalize each timestep in the window
+            for t in range(window_size):
+                timestep = window[t]  # Shape: (n_features,)
+                normalized_windows[window_idx, t] = self._normalize_sample(timestep)
+
+        logging.debug(f"BoundsNormalizer: Normalized {n_windows} windows")
+
+        return normalized_windows
     
     def _normalize_sample(self, sample: np.ndarray) -> np.ndarray:
         """Normalize a single sample."""
@@ -154,37 +154,37 @@ class BoundsNormalizer(BasePreprocessor):
 
         return normalized
     
-    def _normalize_windowed_data(self, windowed_data: np.ndarray) -> np.ndarray:
-        """Normalize windowed data where each row is a flattened window."""
-        n_samples, window_length = windowed_data.shape
+    def _normalize_flattened_windows(self, flattened_windows: np.ndarray) -> np.ndarray:
+        """Normalize flattened windows, where each row is one flattened window."""
+        n_windows, flattened_size = flattened_windows.shape
         n_channels = len(self.bounds)
-        
-        if window_length % n_channels != 0:
-            raise ValueError(f"BoundsNormalizer: Window length ({window_length}) not divisible by number of channels ({n_channels})")
-        
-        window_size = window_length // n_channels
-        normalized_data = np.zeros_like(windowed_data)
-        
-        logging.debug(f"BoundsNormalizer: Processing windowed data: {n_samples} samples, window_length={window_length}, n_channels={n_channels}, window_size={window_size}")
-        
-        for sample_idx in range(n_samples):
-            window = windowed_data[sample_idx]
-            
+
+        if flattened_size % n_channels != 0:
+            raise ValueError(f"BoundsNormalizer: Flattened size ({flattened_size}) not divisible by number of channels ({n_channels})")
+
+        window_size = flattened_size // n_channels
+        normalized_data = np.zeros_like(flattened_windows)
+
+        logging.debug(f"BoundsNormalizer: Processing flattened windows: {n_windows} windows, flattened_size={flattened_size}, n_channels={n_channels}, window_size={window_size}")
+
+        for window_idx in range(n_windows):
+            flattened_window = flattened_windows[window_idx]
+
             try:
-                # Reshape to (window_size, n_channels)
-                reshaped_window = window.reshape(window_size, n_channels)
-                
+                # Reshape back to (window_size, n_channels)
+                window = flattened_window.reshape(window_size, n_channels)
+
                 # Normalize each timestep
-                normalized_window = np.array([self._normalize_sample(timestep) for timestep in reshaped_window])
-                
+                normalized_window = np.array([self._normalize_sample(timestep) for timestep in window])
+
                 # Flatten back
-                normalized_data[sample_idx] = normalized_window.flatten()
-                
+                normalized_data[window_idx] = normalized_window.flatten()
+
             except Exception as reshape_error:
-                logging.error(f"BoundsNormalizer: Error processing sample {sample_idx}: {reshape_error}")
-                logging.error(f"BoundsNormalizer: Window shape: {window.shape}, trying to reshape to ({window_size}, {n_channels})")
+                logging.error(f"BoundsNormalizer: Error processing window {window_idx}: {reshape_error}")
+                logging.error(f"BoundsNormalizer: Window shape: {flattened_window.shape}, trying to reshape to ({window_size}, {n_channels})")
                 raise
-        
+
         return normalized_data
     
     def denormalize(self, normalized_data: np.ndarray) -> np.ndarray:
@@ -207,9 +207,9 @@ class BoundsNormalizer(BasePreprocessor):
                 if normalized_data.shape[1] == len(self.bounds):
                     return np.array([self._denormalize_sample(sample) for sample in normalized_data])
                 else:
-                    return self._denormalize_windowed_data(normalized_data)
+                    return self._denormalize_flattened_windows(normalized_data)
             elif normalized_data.ndim == 3:
-                return self._denormalize_3d_sequences(normalized_data)
+                return self._denormalize_3d_windows(normalized_data)
             else:
                 raise ValueError(f"BoundsNormalizer: Unsupported data dimensionality for denormalization: {normalized_data.ndim}")
                 
@@ -217,16 +217,16 @@ class BoundsNormalizer(BasePreprocessor):
             logging.error(f"BoundsNormalizer: Error denormalizing data: {e}")
             raise
     
-    def _denormalize_3d_sequences(self, sequences: np.ndarray) -> np.ndarray:
-        """Denormalize 3D sequence data."""
-        n_sequences, sequence_length, n_features = sequences.shape
-        denormalized_sequences = np.zeros_like(sequences)
-        
-        for seq_idx in range(n_sequences):
-            for t in range(sequence_length):
-                denormalized_sequences[seq_idx, t] = self._denormalize_sample(sequences[seq_idx, t])
-        
-        return denormalized_sequences
+    def _denormalize_3d_windows(self, windows: np.ndarray) -> np.ndarray:
+        """Denormalize 3D window data."""
+        n_windows, window_size, n_features = windows.shape
+        denormalized_windows = np.zeros_like(windows)
+
+        for window_idx in range(n_windows):
+            for t in range(window_size):
+                denormalized_windows[window_idx, t] = self._denormalize_sample(windows[window_idx, t])
+
+        return denormalized_windows
     
     def _denormalize_sample(self, normalized_sample: np.ndarray) -> np.ndarray:
         """Denormalize a single sample."""
@@ -241,20 +241,20 @@ class BoundsNormalizer(BasePreprocessor):
         
         return denormalized
     
-    def _denormalize_windowed_data(self, windowed_data: np.ndarray) -> np.ndarray:
-        """Denormalize windowed data."""
-        n_samples, window_length = windowed_data.shape
+    def _denormalize_flattened_windows(self, flattened_windows: np.ndarray) -> np.ndarray:
+        """Denormalize flattened windows."""
+        n_windows, flattened_size = flattened_windows.shape
         n_channels = len(self.bounds)
-        window_size = window_length // n_channels
-        
-        denormalized_data = np.zeros_like(windowed_data)
-        
-        for sample_idx in range(n_samples):
-            window = windowed_data[sample_idx]
-            reshaped_window = window.reshape(window_size, n_channels)
-            denormalized_window = np.array([self._denormalize_sample(timestep) for timestep in reshaped_window])
-            denormalized_data[sample_idx] = denormalized_window.flatten()
-        
+        window_size = flattened_size // n_channels
+
+        denormalized_data = np.zeros_like(flattened_windows)
+
+        for window_idx in range(n_windows):
+            flattened_window = flattened_windows[window_idx]
+            window = flattened_window.reshape(window_size, n_channels)
+            denormalized_window = np.array([self._denormalize_sample(timestep) for timestep in window])
+            denormalized_data[window_idx] = denormalized_window.flatten()
+
         return denormalized_data
     
     @classmethod
