@@ -238,12 +238,12 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
             batch_data = self.db_manager.sample_batch(
                 batch_size=self.batch_size * self.samples_multiplier,
-                segment_length=self.window_size,
+                window_size=self.window_size,
                 agent_type="diagnostics",
                 mode="latest",
             )
 
-            logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} sequences")
+            logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
 
             if batch_data is None or len(batch_data['state']) == 0:
                 logging.warning("CAEMLTrainingThread: No batch data returned from database")
@@ -490,10 +490,10 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             try:
                 # Add batch dimension, preprocess → (1, T*n_channels)
-                input_window = self.preprocessing_manager.execute_pipeline(
+                input_flattened_windows = self.preprocessing_manager.execute_pipeline(
                     [input_window_raw]
                 )
-                context_window = self.context_preprocessing_manager.execute_pipeline(
+                context_flattened_windows = self.context_preprocessing_manager.execute_pipeline(
                     [context_window_raw]
                 )
             except Exception as pipeline_error:
@@ -502,7 +502,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             # Model reconstructs input channels only; context is conditioning only
             reconstruction_normalized = self.model.predict(
-                [input_window, context_window], verbose=0
+                [input_flattened_windows, context_flattened_windows], verbose=0
             )   # (1, T*n_input)
 
             # Denormalize reconstruction to original units (post-processing)
@@ -522,7 +522,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             # Compute reconstruction error on preprocessed data
             error_score = float(
-                np.mean((input_window - reconstruction_normalized) ** 2)
+                np.mean((input_flattened_windows - reconstruction_normalized) ** 2)
             )
             is_anomaly = (
                 bool(error_score > self.anomaly_threshold)
@@ -563,7 +563,7 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
             return {
                 'reconstruction_normalized': reconstruction_normalized.flatten(),
                 'reconstruction_original': reconstruction_original.flatten(),
-                'original_window_normalized': input_window.flatten(),
+                'original_window_normalized': input_flattened_windows.flatten(),
                 'error_score': error_score,
                 'is_anomaly': is_anomaly,
                 'is_drift': is_drift,
