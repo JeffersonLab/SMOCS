@@ -61,9 +61,25 @@ def _parse_context_atol(raw_tol, n_context_channels: int) -> np.ndarray:
 
 class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
     """
-    Extends the plain AE ingest thread so that both input channels and context
-    channels are written into the state blob.  Everything else (switch check,
-    DB write) is inherited unchanged.
+    Extends the plain autoencoder ingest thread so that a single incoming Kafka
+    message yields both the input channel values and the context channel values in
+    one filtered pass, while ensuring that the two groups are subsequently written
+    to the database as distinct, separately-typed entities rather than being merged
+    together.
+
+    Specifically: the input channel values continue to be written into the state
+    column, in the same array shape and with the same semantics as in the plain
+    autoencoder agent, so that downstream preprocessing of the input signal is
+    unaffected by the presence of context. The context channel values, in contrast,
+    are written into agent_inferences' fixed, generic context column, via the
+    _build_sensor_payload override defined below, as a single array in
+    context_channels order - so that DBManager can compare a row's context against
+    the previously written row's, to help decide when to advance block_id (see
+    DBManager._compute_block_id), without needing to know what any individual
+    context value actually represents.
+
+    All other behavior - the switch-function check, timestamp construction, and the
+    database write itself - is inherited unchanged from AutoencoderDataIngestThread.
     """
 
     def __init__(self, agent_id: str, config: Dict[str, Any]):
@@ -73,12 +89,47 @@ class ContextualAutoencoderDataIngestThread(AutoencoderDataIngestThread):
         model_input = config.get('model_input', {})
         input_channels = model_input.get('channels', [])
         context_channels = model_input.get('context_channels', [])
+        self.n_input_channels = len(input_channels)
+        self.context_channels = context_channels
         if input_channels and context_channels:
             self.channel_filter = ChannelFilter(input_channels + context_channels)
             logging.info(
                 f"CAEDataIngestThread: channel filter rebuilt — "
                 f"{len(input_channels)} input + {len(context_channels)} context channels"
             )
+
+    def _build_sensor_payload(self, channels: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Overrides AutoencoderDataIngestThread._build_sensor_payload to partition the
+        filtered channel values into their input and context constituents, rather
+        than placing all of them into the state array unmodified.
+
+        The channel_filter constructed in __init__, above, was rebuilt to enumerate
+        input_channels followed by context_channels, in that fixed order; the values
+        supplied here therefore arrive in that same order, which is what permits the
+        positional slice below to separate the two groups correctly. The first
+        n_input_channels values become the state array, exactly as in the base
+        class. The remaining values become a single 'context' array, in
+        context_channels order - DBManager's agent_inferences schema has one fixed,
+        generic context column shared by every agent type (see
+        DBManager.record_sensor_data), so this order is the only thing that ties a
+        position in that array back to a specific channel name; get_training_data,
+        below, relies on this exact same context_channels order to reconstitute it.
+
+        Args:
+            channels: An ordered mapping from channel name to its filtered numeric
+                value, containing both input and context channels together.
+
+        Returns:
+            tuple: A two-element tuple of (state, extra_columns), where state
+                contains only the input channel values, and extra_columns is
+                {'context': ...} - an array of the context channel values, in
+                context_channels order.
+        """
+        values = list(channels.values())
+        state = np.array(values[:self.n_input_channels], dtype=np.float32)
+        context = np.array(values[self.n_input_channels:], dtype=np.float32)
+        return state, {'context': context}
 
 
 # ---------------------------------------------------------------------------
@@ -89,11 +140,21 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
     """
     Extends the plain AE training thread with a context-conditioned architecture.
 
-    The state blob stored by the ingest thread contains
-        [input_channels | context_channels]
-    in that order.  get_training_data() returns a single numpy array with the
-    same layout so that training_loop()'s .shape access does not break;
-    train_model() / eval_model() split it at the input_split index.
+    The 'state' array returned within sample_batch's result contains input channel
+    values exclusively, in the same shape and with the same meaning as in the plain
+    autoencoder agent. The 'context' array, by contrast, holds this agent's context
+    channel values, shape (batch_size_eff, window_size, n_context), already in the fixed order
+    given by context_channels - the same order _build_sensor_payload wrote them in -
+    since agent_inferences stores context as one fixed, generic array per row (see
+    DBManager.record_sensor_data), rather than as a column per context channel.
+
+    get_training_data() ultimately returns one combined numpy array, formed by
+    concatenating the preprocessed input windows with the preprocessed context
+    windows, so that the shape-inspection logic in the inherited training_loop()
+    continues to operate correctly without modification. train_model() and
+    eval_model(), further below, subsequently split this combined array back into
+    its constituent input and context portions at the index computed by
+    _input_split().
     """
 
     def __init__(self, agent_id: str, config: Dict[str, Any]):
@@ -103,7 +164,8 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         # self.n_context_channels, so if self.n_context_channels is not set before
         # super().__init__(), that would be too late.
         self.n_input_channels = len(model_input.get('channels', []))
-        self.n_context_channels = len(model_input.get('context_channels', []))
+        self.context_channels = model_input.get('context_channels', [])
+        self.n_context_channels = len(self.context_channels)
         self.context_dim = None
 
         super().__init__(agent_id, config)  # sets window_size/encoder_dims/etc., creates preprocessing_manager (input channels only), and calls load_existing_model()
@@ -214,7 +276,12 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
     def get_training_data(self) -> Optional[np.ndarray]:
         """
-        Retrieve raw training data from database and apply preprocessing pipeline.
+        Retrieve raw training data from database and apply preprocessing pipeline,
+        but only if new data has arrived since the last successful training round
+        (see the total_samples <= self.committed_last_training_count check, below).
+        This gate exists specifically to stop training_loop() from retraining on data
+        it has already trained on; eval_model() deliberately does not go through
+        this method for that reason - see _fetch_and_preprocess_batch's docstring.
 
         Returns:
             Combined array of shape (n_windows, window_size*(n_input+n_context)),
@@ -236,50 +303,86 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
 
             logging.info(f"CAEMLTrainingThread: Found {total_samples - self.committed_last_training_count} new samples since last training")
 
-            batch_data = self.db_manager.sample_batch(
-                batch_size=self.batch_size * self.samples_multiplier,
-                window_size=self.window_size,
-                agent_type="diagnostics",
-                mode="latest",
-            )
-
-            logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
-
-            if batch_data is None or len(batch_data['state']) == 0:
-                logging.warning("CAEMLTrainingThread: No batch data returned from database")
+            combined = self._fetch_and_preprocess_batch()
+            if combined is None:
                 return None
-
-            logging.info("CAEMLTrainingThread: Starting preprocessing pipeline...")
-
-            # states: (batch, window_size, n_input + n_context)
-            states = batch_data['state']
-            input_states = states[:, :, :self.n_input_channels]
-            context_states = states[:, :, self.n_input_channels:]
-
-            input_windows = self.preprocessing_manager.execute_pipeline(input_states)
-            context_windows = self.context_preprocessing_manager.execute_pipeline(context_states)
-
-            if input_windows is None or len(input_windows) == 0:
-                logging.error("CAEMLTrainingThread: No valid windows created by preprocessing pipeline")
-                return None
-
-            combined = np.concatenate([input_windows, context_windows], axis=1)
-
-            logging.info(f"CAEMLTrainingThread: Final combined windowed data shape: {combined.shape}")
-            logging.debug(f"CAEMLTrainingThread: Data range: [{np.min(combined):.6f}, {np.max(combined):.6f}]")
-            logging.debug(f"CAEMLTrainingThread: Data mean: {np.mean(combined):.6f}")
-            logging.debug(f"CAEMLTrainingThread: Data std: {np.std(combined):.6f}")
 
             # Stage the candidate count; training_loop() commits it to
             # self.committed_last_training_count only once train_model() actually succeeds.
             self._pending_last_training_count = total_samples
 
-            logging.info(f"CAEMLTrainingThread: Successfully prepared {len(combined)} training windows using preprocessing pipeline")
             return combined
 
         except Exception as e:
             logging.error(f"CAEMLTrainingThread: Error getting training data: {e}")
             return None
+
+    def _fetch_and_preprocess_batch(self) -> Optional[np.ndarray]:
+        """
+        Samples one batch of windows from the database and runs the input and
+        context channels each through their own preprocessing pipeline, with
+        no gating on whether the data is "new."
+
+        This is used by both get_training_data(), above, which applies that
+        "new since last training" gate itself before calling here, and by
+        eval_model(), which deliberately calls this directly instead of going
+        through get_training_data(). eval_model() only needs some current data
+        to score the model against, not specifically unseen data - if it went
+        through get_training_data() instead, it would be racing the very
+        training_loop() call that just ran moments earlier and already bumped
+        committed_last_training_count to the current total_samples, so it would return
+        None unless a brand new row happened to arrive in that narrow window.
+        That was a real, previously-observed bug: it caused eval to fail on
+        roughly half of all training cycles, each such failure leaving that
+        model version's saved metadata without an anomaly_threshold value.
+
+        Returns:
+            Combined array of shape (n_windows, window_size*(n_input+n_context)),
+            or None if no batch data or no valid windows were available.
+        """
+        batch_data = self.db_manager.sample_batch(
+            batch_size=self.batch_size * self.samples_multiplier,
+            window_size=self.window_size,
+            agent_type="diagnostics",
+            sampling_lookback=self.sampling_lookback,
+            sampling_strategy=self.sampling_strategy,
+        )
+
+        logging.info(f"CAEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
+
+        if batch_data is None or len(batch_data['state']) == 0:
+            logging.warning("CAEMLTrainingThread: No batch data returned from database")
+            return None
+
+        logging.info("CAEMLTrainingThread: Starting preprocessing pipeline...")
+
+        # 'state' contains input channel values exclusively, shape
+        # (batch_size_eff, window_size, n_input); 'context' contains this agent's context
+        # channel values, shape (batch_size_eff, window_size, n_context), already in
+        # context_channels order - the same order _build_sensor_payload wrote them
+        # in when this data was first ingested. DBManager's agent_inferences schema
+        # stores context as one fixed, generic array per row (see
+        # DBManager.record_sensor_data), so no reassembly from separate columns is
+        # needed here, unlike when context was still one database column per channel.
+        input_states = batch_data['state']
+        context_states = batch_data['context']
+
+        input_flattened_windows = self.preprocessing_manager.execute_pipeline(input_states)
+        context_flattened_windows = self.context_preprocessing_manager.execute_pipeline(context_states)
+
+        if input_flattened_windows is None or len(input_flattened_windows) == 0:
+            logging.error("CAEMLTrainingThread: No valid windows created by preprocessing pipeline")
+            return None
+
+        combined = np.concatenate([input_flattened_windows, context_flattened_windows], axis=1)
+
+        logging.info(f"CAEMLTrainingThread: Final combined flattened windows shape: {combined.shape}")
+        logging.debug(f"CAEMLTrainingThread: Data range: [{np.min(combined):.6f}, {np.max(combined):.6f}]")
+        logging.debug(f"CAEMLTrainingThread: Data mean: {np.mean(combined):.6f}")
+        logging.debug(f"CAEMLTrainingThread: Data std: {np.std(combined):.6f}")
+
+        logging.info(f"CAEMLTrainingThread: Successfully prepared {len(combined)} training windows using preprocessing pipeline")
+        return combined
 
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
         """
@@ -334,6 +437,12 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
         """
         Evaluate the trained model.
 
+        Calls _fetch_and_preprocess_batch() directly rather than get_training_data(),
+        since evaluation only needs some current data to score the model against, not
+        specifically data unseen since the last training round - see
+        _fetch_and_preprocess_batch's docstring for why going through
+        get_training_data() here would be a bug, not just a stylistic difference.
+
         Returns:
             Dict of evaluation metrics, or {'status': 'skipped', 'reason': ...} on failure.
         """
@@ -341,7 +450,7 @@ class ContextualAutoencoderMLTrainingThread(AutoencoderMLTrainingThread):
             if self.model is None:
                 return {'status': 'skipped', 'reason': 'No model to evaluate'}
 
-            combined = self.get_training_data()
+            combined = self._fetch_and_preprocess_batch()
             if combined is None:
                 return {'status': 'skipped', 'reason': 'No evaluation data available'}
 
@@ -470,14 +579,19 @@ class ContextualAutoencoderMLInferenceThread(AutoencoderMLInferenceThread):
 
             # sensor_values: (n_input + n_context,) in channel-filter order
             sensor_values = inference_request['sensor_values']
-            self.recent_data.append(sensor_values)
 
-            # Keep buffer at reasonable size
-            if len(self.recent_data) > self.window_size * 2:
-                self.recent_data = self.recent_data[-self.window_size * 2:]
+            # This sample's context, for block-boundary purposes only: the same
+            # context_channels values ContextualAutoencoderDataIngestThread._build_sensor_payload
+            # writes to agent_inferences' context column, compared under exact
+            # equality by _append_to_buffer/is_new_block - NOT to be confused
+            # with this class's own context-drift detection further below,
+            # which compares raw context values under context_tolerance instead.
+            block_context = tuple(sensor_values[self.n_input_channels:])
 
-            # Need at least window_size samples for inference
-            if len(self.recent_data) < self.window_size:
+            # Add sensor values to the block-aware sliding-window buffer - resets
+            # on a gap or context change, so every window formed below is
+            # guaranteed block-homogeneous (see _append_to_buffer's docstring)
+            if not self._append_to_buffer(sensor_values, inference_request['timestamp'], block_context=block_context):
                 logging.debug("CAEMLInferenceThread: Not enough samples to make a window for inference")
                 return None
 

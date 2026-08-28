@@ -58,6 +58,7 @@ class MLInferenceThreadBase(KafkaStreamingProcessBase, ABC):
             'port': int(os.environ.get('MYSQL_PORT', 3307)),
             'user': os.environ.get('MYSQL_USER', 'root'),
             'pwd': os.environ['MYSQL_ROOT_PASSWORD'],
+            'max_gap_seconds': self.config.get('max_gap_seconds', float('inf')),
         }
         return DBManager(db_config)
     

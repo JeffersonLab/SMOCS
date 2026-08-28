@@ -141,6 +141,22 @@ contextual_autoencoder_agent1:
     - window_processor
   window_size: 10
   min_training_samples: 100
+  # Maximum permitted gap, in seconds, between the timestamps of two consecutively
+  # ingested rows before DBManager concludes that data collection was interrupted and
+  # begins a new block_id. This value should be set with reference to the sensor's
+  # expected sampling interval, plus a reasonable tolerance for network or processing
+  # jitter, so that ordinary variation in arrival time is not mistaken for an
+  # interruption. If this key is omitted from the configuration entirely, gap-based
+  # block splitting is disabled outright; DBManager will then only start a new block
+  # when a configured context column's value changes (see the context_channels entry
+  # under model_input, below).
+  max_gap_seconds: 5.0
+  # How far back sample_batch looks, and in what order it considers each block's
+  # candidate sequences, when assembling a training batch - see DBManager.sample_batch.
+  # These are set explicitly here, matching sample_batch's own defaults, rather than
+  # left to fall back on them implicitly.
+  sampling_lookback: "24h"
+  sampling_strategy: "latest"
   encoder_dims: [64, 32, 16]
   learning_rate: 0.0001
   batch_size: 16
