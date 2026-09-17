@@ -13,6 +13,7 @@ from tensorflow.keras import layers
 
 from smocs.cores import AgentBase, DataIngestThreadBase, MLTrainingThreadBase, MLInferenceThreadBase
 from smocs.utils import ConfigLoader, ChannelFilter, setup_logging
+from smocs.utils.block_boundary import parse_timestamp, is_new_block
 from smocs.preprocessing import PreprocessingManager
 
 class AutoencoderDataIngestThread(DataIngestThreadBase):
@@ -20,7 +21,40 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
     Data ingestion thread for autoencoder agent.
     Stores raw time series sensor data to database.
     """
-    
+
+    def _build_sensor_payload(self, channels: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Constructs the (state_array, extra_columns) pair to be written to the database
+        from a single dictionary of filtered channel values.
+
+        This hook exists so that subclasses may alter how the state array and any
+        additional, separately-stored columns are derived from the same underlying
+        channel values, without having to duplicate the surrounding timestamp
+        construction, switch check, and database-write logic in store_message() below.
+
+        In this base implementation, appropriate for an agent with no notion of
+        context, every channel value is placed into the state array, in the order
+        supplied, and no additional columns are produced.
+
+        ContextualAutoencoderDataIngestThread overrides this method to instead
+        partition the incoming channel values: the input channels are placed into the
+        state array, exactly as here, while the context channels are extracted into
+        extra_columns, to be written as their own separate, individually named
+        database columns rather than being embedded within the state array.
+
+        Args:
+            channels: An ordered mapping from channel name to its filtered numeric
+                value, as produced upstream by ChannelFilter.
+
+        Returns:
+            tuple: A two-element tuple of (state_array, extra_columns), where
+                state_array is a numpy array of the values to be stored under the
+                'state' column, and extra_columns is a dictionary of any additional
+                column name/value pairs to be merged into the row prior to insertion.
+        """
+        sensor_values = np.array(list(channels.values()), dtype=np.float32)
+        return sensor_values, {}
+
     def store_message(self, message_data, topic, partition, offset) -> bool:
         """
         Parse sensor message and store raw data to database.
@@ -32,23 +66,18 @@ class AutoencoderDataIngestThread(DataIngestThreadBase):
                 timestamp = datetime.fromtimestamp(message_data['timestamp'])
             else:
                 timestamp = datetime.now()
-            
             # Get filtered channels (already processed by base class)
             channels = message_data.get('channels', {})
-            
             if not channels:
                 logging.error("AEDataIngestThread: No channels in filtered message data")
                 return False
-            
-            # Convert channel values directly to numpy array (maintains order)
-            channel_values = list(channels.values())
-            sensor_values = np.array(channel_values, dtype=np.float32)
-            
+            sensor_values, extra_columns = self._build_sensor_payload(channels)
             # Store RAW data in database (no preprocessing here)
             sensor_data = {
                 'state_source_timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S.%f'),
                 'state_received_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-                'state': sensor_values  # Raw data - preprocessing happens during training
+                'state': sensor_values,  # Raw data - preprocessing happens during training
+                **extra_columns,
             }
 
             if not self.switch_fn(channels):
@@ -87,6 +116,13 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         self.samples_multiplier = config.get('samples_multiplier', 10)
         self.epochs = config.get('epochs', 50)
         self.anomaly_threshold_type = config.get('anomaly_threshold_type', 'fixed')
+
+        # Passed straight through to DBManager.sample_batch (see its docstring for
+        # the full sampling behavior). Defaults here intentionally mirror
+        # sample_batch's own defaults, so omitting these keys from the agent's
+        # config is equivalent to omitting them from a direct sample_batch call.
+        self.sampling_lookback = config.get('sampling_lookback', "24h")
+        self.sampling_strategy = config.get('sampling_strategy', 'latest')
 
         if self.anomaly_threshold_type == 'percentile':
             self.threshold_percentile = config.get('threshold_percentile', 95.0)
@@ -278,70 +314,103 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
     
     def get_training_data(self) -> Optional[np.ndarray]:
         """
-        Retrieve raw training data from database and apply preprocessing pipeline.
+        Retrieve raw training data from database and apply preprocessing pipeline,
+        but only if new data has arrived since the last successful training round
+        (see the total_samples <= self.committed_last_training_count check, below).
+        This gate exists specifically to stop training_loop() from retraining on data
+        it has already trained on; eval_model() deliberately does not go through
+        this method for that reason - see _fetch_and_preprocess_batch's docstring.
         """
         try:
             # Check if enough data available
-            total_samples = self.db_manager.get_size("agent_inferences") 
-            
+            total_samples = self.db_manager.get_size("agent_inferences")
+
             logging.info(f"AEMLTrainingThread: Database contains {total_samples} samples (need {self.min_training_samples})")
-            
+
             if total_samples < self.min_training_samples:
                 logging.debug(f"AEMLTrainingThread: Not enough samples for training: {total_samples} < {self.min_training_samples}")
                 return None
-            
+
             # Check if we have new data since last training
             if total_samples <= self.committed_last_training_count:
                 logging.debug("AEMLTrainingThread: No new data since last training")
                 return None
 
             logging.info(f"AEMLTrainingThread: Found {total_samples - self.committed_last_training_count} new samples since last training")
-            
-            # Get consecutive windows from database, each of length window_size
-            batch_data = self.db_manager.sample_batch(
-                batch_size=self.batch_size * self.samples_multiplier,
-                window_size=self.window_size,
-                agent_type="diagnostics",
-                mode="latest"
-            )
 
-            logging.info(f"AEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
-
-            if batch_data is None or len(batch_data['state']) == 0:
-                logging.warning("AEMLTrainingThread: No batch data returned from database")
+            flattened_windows = self._fetch_and_preprocess_batch()
+            if flattened_windows is None:
                 return None
-
-            # Execute preprocessing pipeline
-            logging.info("AEMLTrainingThread: Starting preprocessing pipeline...")
-
-            try:
-                flattened_windows = self.preprocessing_manager.execute_pipeline(batch_data['state'])
-
-                if flattened_windows is None or len(flattened_windows) == 0:
-                    logging.error("AEMLTrainingThread: No valid windows created by preprocessing pipeline")
-                    return None
-
-            except Exception as pipeline_error:
-                logging.error(f"AEMLTrainingThread: Preprocessing pipeline failed: {pipeline_error}")
-                return None
-
-            # Log final statistics
-            logging.info(f"AEMLTrainingThread: Final flattened windows shape: {flattened_windows.shape}")
-            logging.debug(f"AEMLTrainingThread: Data range: [{np.min(flattened_windows):.6f}, {np.max(flattened_windows):.6f}]")
-            logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(flattened_windows):.6f}")
-            logging.debug(f"AEMLTrainingThread: Data std: {np.std(flattened_windows):.6f}")
 
             # Stage the candidate count; training_loop() commits it to
             # self.committed_last_training_count only once train_model() actually succeeds.
             self._pending_last_training_count = total_samples
 
-            logging.info(f"AEMLTrainingThread: Successfully prepared {len(flattened_windows)} training windows using preprocessing pipeline")
             return flattened_windows
-            
+
         except Exception as e:
             logging.error(f"AEMLTrainingThread: Error getting training data: {e}")
             logging.error(f"AEMLTrainingThread: Exception details: {type(e).__name__}: {str(e)}")
             return None
+
+    def _fetch_and_preprocess_batch(self) -> Optional[np.ndarray]:
+        """
+        Samples one batch of windows from the database and runs it through the
+        preprocessing pipeline, with no gating on whether the data is "new."
+
+        This is used by both get_training_data(), above, which applies that
+        "new since last training" gate itself before calling here, and by
+        eval_model(), which deliberately calls this directly instead of going
+        through get_training_data(). eval_model() only needs some current data
+        to score the model against, not specifically unseen data - if it went
+        through get_training_data() instead, it would be racing the very
+        training_loop() call that just ran moments earlier and already bumped
+        committed_last_training_count to the current total_samples, so it would return
+        None unless a brand new row happened to arrive in that narrow window.
+        That was a real, previously-observed bug: it caused eval to fail on
+        roughly half of all training cycles.
+
+        Returns:
+            np.ndarray or None: The batch's windows after preprocessing, or
+                None if no batch data or no valid windows were available.
+        """
+        # Get consecutive windows from database, each of length window_size
+        batch_data = self.db_manager.sample_batch(
+            batch_size=self.batch_size * self.samples_multiplier,
+            window_size=self.window_size,
+            agent_type="diagnostics",
+            sampling_lookback=self.sampling_lookback,
+            sampling_strategy=self.sampling_strategy,
+        )
+
+        logging.info(f"AEMLTrainingThread: sample_batch returned {len(batch_data['state']) if batch_data else 0} windows")
+
+        if batch_data is None or len(batch_data['state']) == 0:
+            logging.warning("AEMLTrainingThread: No batch data returned from database")
+            return None
+
+        # Execute preprocessing pipeline
+        logging.info("AEMLTrainingThread: Starting preprocessing pipeline...")
+
+        try:
+            flattened_windows = self.preprocessing_manager.execute_pipeline(batch_data['state'])
+
+            if flattened_windows is None or len(flattened_windows) == 0:
+                logging.error("AEMLTrainingThread: No valid windows created by preprocessing pipeline")
+                return None
+
+        except Exception as pipeline_error:
+            logging.error(f"AEMLTrainingThread: Preprocessing pipeline failed: {pipeline_error}")
+            return None
+
+        # Log final statistics
+        logging.info(f"AEMLTrainingThread: Final flattened windows shape: {flattened_windows.shape}")
+        logging.debug(f"AEMLTrainingThread: Data range: [{np.min(flattened_windows):.6f}, {np.max(flattened_windows):.6f}]")
+        logging.debug(f"AEMLTrainingThread: Data mean: {np.mean(flattened_windows):.6f}")
+        logging.debug(f"AEMLTrainingThread: Data std: {np.std(flattened_windows):.6f}")
+
+        logging.info(f"AEMLTrainingThread: Successfully prepared {len(flattened_windows)} training windows using preprocessing pipeline")
+        return flattened_windows
 
     def train_model(self, training_data: np.ndarray) -> Dict[str, Any]:
         """
@@ -397,8 +466,8 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
 
         Args:
             errors: Array of reconstruction errors, guaranteed non-empty by callers
-                (eval_model() only reaches here once get_training_data() has
-                already confirmed a non-empty batch)
+                (eval_model() only reaches here once _fetch_and_preprocess_batch()
+                has already confirmed a non-empty batch)
 
         Returns:
             Threshold value
@@ -413,13 +482,19 @@ class AutoencoderMLTrainingThread(MLTrainingThreadBase):
         """
         Evaluate the trained model.
         Denormalization is handled separately as post-processing (not part of pipeline).
+
+        Calls _fetch_and_preprocess_batch() directly rather than get_training_data(),
+        since evaluation only needs some current data to score the model against, not
+        specifically data unseen since the last training round - see
+        _fetch_and_preprocess_batch's docstring for why going through
+        get_training_data() here would be a bug, not just a stylistic difference.
         """
         try:
             if self.model is None:
                 return {'status': 'skipped', 'reason': 'No model to evaluate'}
 
             # Get small batch of recent preprocessed data for evaluation
-            eval_data = self.get_training_data()
+            eval_data = self._fetch_and_preprocess_batch()
             if eval_data is None:
                 return {'status': 'skipped', 'reason': 'No evaluation data available'}
             
@@ -637,9 +712,23 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         else:
             self.anomaly_threshold = config.get('threshold', 0.02)
 
+        # Same rule, and same config key, DBManager uses to assign block_id at
+        # insertion time (see ml_inference_thread_base.py's _setup_db_connection,
+        # which reads this identical key for its own DBManager instance) - kept
+        # in sync deliberately, so that _append_to_buffer's in-memory notion of a
+        # "block" never drifts from the one DBManager would assign to the same
+        # data. See smocs.utils.block_boundary.is_new_block for the full rule.
+        self.max_gap_seconds = config.get('max_gap_seconds', float('inf'))
+
         self.model = None
         self.input_dim = None
+        # recent_data holds this block's buffered samples only - see
+        # _append_to_buffer, which resets all three of these buffers in lockstep
+        # whenever a new block begins, so that every window later sliced from
+        # recent_data is guaranteed block-homogeneous.
         self.recent_data = []
+        self._recent_timestamps = []
+        self._recent_block_contexts = []
         self.current_model_version = None
         self.last_model_check = 0
         self.model_check_interval = config.get('model_check_interval', 30)
@@ -681,7 +770,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             
             # Load the TensorFlow model
             self.model = tf.keras.models.load_model(model_file)
-            
+
             # Update instance variables from metadata
             self.input_dim = latest_info['input_dim']
 
@@ -699,7 +788,7 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
                                      f"{self.anomaly_threshold}")
 
             self.current_model_version = model_version
-            
+
             logging.info(f"AEMLInferenceThread: Loaded model v{model_version}: input_dim={self.input_dim}, threshold={self.anomaly_threshold}")
             
         except Exception as e:
@@ -712,6 +801,67 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
             self.load_model()
             self.last_model_check = current_time
 
+    def _append_to_buffer(self, sensor_values: np.ndarray, timestamp, block_context: Optional[Tuple] = None) -> bool:
+        """
+        Appends one new sample to the sliding-window buffer (self.recent_data),
+        first resetting that buffer - and its parallel timestamp/context buffers
+        - if this sample begins a new block relative to the most recently
+        buffered sample.
+
+        "New block" here means exactly what DBManager._compute_block_id means by
+        it: a timestamp gap exceeding self.max_gap_seconds, or a change in
+        block_context under exact equality (see
+        smocs.utils.block_boundary.is_new_block). Applying that same rule here,
+        purely in-memory, guarantees that every window later sliced from
+        self.recent_data (see perform_inference) is block-homogeneous - the
+        streaming analogue of the guarantee DBManager.sample_window enforces,
+        after the fact, for windows sampled from the database. Querying the
+        database for this sample's actual block_id instead was deliberately
+        rejected - see block_boundary.py's module docstring for why that would
+        both race the ingest thread's own write and add a needless per-message
+        round-trip.
+
+        Args:
+            sensor_values: This sample's channel values, as passed to
+                perform_inference.
+            timestamp: This sample's timestamp, in any form accepted by
+                smocs.utils.block_boundary.parse_timestamp.
+            block_context: This sample's context value for block-boundary
+                purposes only, already normalized to a plain tuple - or None,
+                for an agent with no notion of context (the case here; see
+                ContextualAutoencoderMLInferenceThread, which supplies one).
+
+        Returns:
+            bool: True once the buffer holds at least self.window_size samples
+                of the current block, meaning perform_inference now has enough
+                data to form a window; False otherwise.
+        """
+        new_timestamp = parse_timestamp(timestamp)
+
+        if self.recent_data and is_new_block(
+            self._recent_timestamps[-1], self._recent_block_contexts[-1],
+            new_timestamp, block_context, self.max_gap_seconds
+        ):
+            logging.info(f"{self.__class__.__name__}: Block boundary detected in streaming buffer "
+                         f"(gap or context change) - resetting sliding window")
+            self.recent_data = []
+            self._recent_timestamps = []
+            self._recent_block_contexts = []
+
+        self.recent_data.append(sensor_values)
+        self._recent_timestamps.append(new_timestamp)
+        self._recent_block_contexts.append(block_context)
+
+        # Trim to exactly window_size, in lockstep - perform_inference (and its
+        # contextual override) never read anything beyond the trailing
+        # window_size entries, so there is nothing to gain from retaining more.
+        if len(self.recent_data) > self.window_size:
+            self.recent_data = self.recent_data[-self.window_size:]
+            self._recent_timestamps = self._recent_timestamps[-self.window_size:]
+            self._recent_block_contexts = self._recent_block_contexts[-self.window_size:]
+
+        return len(self.recent_data) >= self.window_size
+
     def perform_inference(self, inference_request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Perform anomaly detection inference using preprocessing pipeline.
@@ -719,24 +869,19 @@ class AutoencoderMLInferenceThread(MLInferenceThreadBase):
         try:
             # Check for model updates periodically
             self.check_for_model_updates()
-            
+
             if self.model is None:
                 self.load_model()
                 if self.model is None:
                     logging.debug("AEMLInferenceThread: No model available for inference")
                     return None
-            
+
             sensor_values = inference_request['sensor_values']
-            
-            # Add sensor values to recent data buffer
-            self.recent_data.append(sensor_values)
-            
-            # Keep buffer at reasonable size
-            if len(self.recent_data) > self.window_size * 2:
-                self.recent_data = self.recent_data[-self.window_size * 2:]
-            
-            # Need at least window_size samples for inference
-            if len(self.recent_data) < self.window_size:
+
+            # Add sensor values to the block-aware sliding-window buffer - resets
+            # on a gap or context change, so every window formed below is
+            # guaranteed block-homogeneous (see _append_to_buffer's docstring)
+            if not self._append_to_buffer(sensor_values, inference_request['timestamp']):
                 logging.debug("AEMLInferenceThread: Not enough samples to make a window for inference")
                 return None
             
@@ -1049,7 +1194,7 @@ class AutoencoderAgent(AgentBase):
 
         logging.info(f"AEAgent: AutoencoderAgent initialized with config: {self.agent_config}")
         logging.info(f"AEAgent: Enabled threads: {self.enabled_threads}")
-    
+
     def create_data_ingest_component(self):
         """Create data ingestion thread component."""
         if 'ingest' in self.enabled_threads:
