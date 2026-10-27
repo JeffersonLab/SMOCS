@@ -47,9 +47,10 @@ class IndustryParticleAcceleratorEnv(gym.Env):
         self.conveyor_speed = 1.0  # normal speed initially
         self.step_count = 0
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         """Reset the environment to the initial state."""
-        
+        super().reset(seed=seed)
+
         self.beam_energy_level = 1.0
         self.dose_accumulated = 0.0
         self.leakage_level = 0.0
