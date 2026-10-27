@@ -130,6 +130,9 @@ class EnvUITF(gym.Env):
 
         self.step_count = 0
         self.is_connected = False
+        # The following are added only for the close method not to fail if called before connect() is called
+        self.obs_pvs = []
+        self.action_pvs = []
 
     
     def connect(self):
@@ -168,7 +171,7 @@ class EnvUITF(gym.Env):
         if not self.is_connected:
             self.connect()
         # Reset action to design settings with random uniform perturbation
-        self.action = self.action_design_settings + np.random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation)
+        self.action = self.action_design_settings + self.np_random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation)
         self._apply_action()
         self.step_count = 0
         self.obs = self._get_obs()
