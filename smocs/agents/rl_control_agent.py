@@ -680,11 +680,15 @@ class RLControlAgent(AgentBase):
                 raise ValueError(f"No configuration found for key: {config_key}")
             
             self.agent_config = config_loader.config.get(config_key, {})
+            # Environment comes from the gymnasium section so the local env is built
+            # exactly like the one run by the Gymnasium Kafka wrapper
+            gym_config = config_loader.get_gymnasium_config()
         else:
             raise ValueError("config_path is required for RLControlAgent")
-        
+
         # Extract configuration
-        self.environment_id = self.agent_config.get('environment', 'CartPole-v1')
+        self.environment_id = gym_config['environment']
+        self.env_kwargs = gym_config['env_kwargs']
         self.soct_agent_type = self.agent_config.get('soct_agent_type', 'KerasTD3-v0')
         self.soct_agent_config_path = self.agent_config.get('soct_agent_config_path')
         self.buffer_type = self.agent_config.get('buffer_type', 'ER-v0')
@@ -723,14 +727,16 @@ class RLControlAgent(AgentBase):
         """
         Create a local instance of the Gymnasium environment.
         This is used only for initialization purposes (getting observation/action spaces).
-        The actual environment is managed by the Gymnasium Kafka wrapper.
-        
+        The actual environment is managed by the Gymnasium Kafka wrapper, so the same
+        env_kwargs are used here to get matching observation/action spaces.
+
         Returns:
             gym.Env: Local environment instance
         """
         try:
-            env = gym.make(self.environment_id)
+            env = gym.make(self.environment_id, **self.env_kwargs)
             logging.info(f"RLControlAgent: Created environment: {self.environment_id}")
+            logging.info(f"RLControlAgent: Environment kwargs: {self.env_kwargs}")
     
             # Log environment details
             logging.info(f"RLControlAgent: Observation space: {env.observation_space}")

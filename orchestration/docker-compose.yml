@@ -75,6 +75,7 @@ services:
     platform: linux/amd64
     environment:
       EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
+      EPICS_CA_AUTO_ADDR_LIST: ${EPICS_CA_AUTO_ADDR_LIST:-YES}
       SMOCS_LOG_LEVEL: INFO
     command: ["python", "-m", "smocs.producers.epics_kafka_producer"]
 
@@ -94,6 +95,11 @@ services:
       context: ../
       dockerfile: ./orchestration/containers/gymnasium-kafka-controller/Dockerfile
     profiles: ["gymnasium"]
+    # Uncomment only when running an EPICS-backed environment (e.g. UITF-v0) on an
+    # ARM host such as an Apple Silicon Mac, to match epics-kafka-producer. Leave it
+    # commented on x86_64 hosts (no effect there) and for non-EPICS environments
+    # (it would force slow emulation on ARM for no benefit).
+    # platform: linux/amd64
     depends_on:
       kafka-broker:
         condition: service_healthy
@@ -103,6 +109,11 @@ services:
       CONFIG_PATH: /app/config.yaml
       PYTHONPATH: /app
       SMOCS_LOG_LEVEL: INFO
+      # Only read by EPICS-backed environments (e.g. UITF-v0); ignored otherwise.
+      # Set EPICS_CA_ADDR_LIST in your shell/.env to the IOC gateway address(es) to reach.
+      # Set EPICS_CA_AUTO_ADDR_LIST=NO to search only the addresses in EPICS_CA_ADDR_LIST.
+      EPICS_CA_ADDR_LIST: ${EPICS_CA_ADDR_LIST}
+      EPICS_CA_AUTO_ADDR_LIST: ${EPICS_CA_AUTO_ADDR_LIST:-YES}
     networks:
       - kafka-net
     restart: unless-stopped

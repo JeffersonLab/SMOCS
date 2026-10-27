@@ -31,25 +31,58 @@ epics:
       
 gymnasium:
   # Environment settings
-  environment: "WaveGenerator-v0"
   render_mode: null  # Options: null, 'human', 'rgb_array'
   max_episode_steps: null  # null uses environment default
 
-  # Environment constructor kwargs (passed to gym.make via env_kwargs)
+  # Environment selection: keep exactly one of the templates below uncommented.
+  # env_kwargs are passed to the environment's __init__ via gym.make(environment, **env_kwargs).
+  # rl_control_agent1 builds its local env from these same settings.
+
+  # --- UITF-v0 (smocs/control_plane/uitf_env.py) ---
+  # Placeholder kwargs: rename/extend them to match EnvUITF.__init__
+  # Each *_bounds list needs one [low, high] pair per PV, in the same order
+  environment: "UITF-v0"
   env_kwargs:
-    reference_period: 100
-    default_wave_type: 0      # 0=Sine
-    default_amplitude: 5.0
-    default_frequency: 3
-    default_drift: 0.0
-    default_noise_level: 0.5
-    auto_anomaly_enabled: true
-    auto_anomaly_p_per_step: 0.01   # ~1 anomaly per 100 steps
-    auto_anomaly_cooldown: 100
-    auto_anomaly_dur_min: 20
-    auto_anomaly_dur_max: 100
-    auto_anomaly_mag_min: 1.5
-    auto_anomaly_mag_max: 5.0
+    # Questions: 1) Are absolute & relative positions registered with different PVs? 2) Can action PVs be used to both set and read corrector values?
+    obs_pv_names: ['IPMk403.XPOS', 'IPMK403.YPOS', 'MLHK402H.BDL', 'MLHK402V.BDL']      # e.g. 'IPMK101.XPOS' & 'IPMK101.YPOS' are BPMs. We need to confirm that these are ABSOLUTE positions.
+    obs_min: [-1.0, -1.0, 4.0, 4.0]
+    obs_max: [1.0, 1.0, 6.0, 6.0]
+    obs_rtol: [1e-5, 1e-5, 1e-5, 1e-5]
+    obs_atol: [1e-8, 1e-8, 1e-8, 1e-8]
+    action_pv_names: ['MLHK402H.BDL', 'MLHK402V.BDL']     # Are these used to both set and read corrector PVs?
+    action_design_settings: [5.0, 5.0]     # ideal current for corrector PVs - used to set the magnet current in an env.reset() 
+    action_min: [0.0, 0.0]
+    action_max: [0.1, 0.1]      # doesn't have to cover the whole range of the corrector PVs since mode is 'delta'. If mode = 'abs', it must cover the full range.
+    action_min_perturbation: [-0.1, -0.1]
+    action_max_perturbation: [0.1, 0.1]
+    action_rtol: [1e-5, 1e-5]
+    action_atol: [1e-8, 1e-8]
+    bpm_pv_names: ['IPMk403.XPOS', 'IPMK403.YPOS']
+    bpm_pv_refs: [0.0, 0.0]
+    transient_time: 0.1
+    mode: 'delta'
+
+  # --- SCORE-IndustryParticleAccelerator-v0 (smocs/control_plane/proxy_industry_env.py) ---
+  # environment: "SCORE-IndustryParticleAccelerator-v0"
+  # env_kwargs:
+  #   gym_space_type: "array"  # Must stay "array": the RL agent expects a flat observation/action vector
+
+  # --- WaveGenerator-v0 (smocs/control_plane/wave_generator_env.py) ---
+  # environment: "WaveGenerator-v0"
+  # env_kwargs:
+  #   reference_period: 100
+  #   default_wave_type: 0      # 0=Sine
+  #   default_amplitude: 5.0
+  #   default_frequency: 3
+  #   default_drift: 0.0
+  #   default_noise_level: 0.5
+  #   auto_anomaly_enabled: true
+  #   auto_anomaly_p_per_step: 0.01   # ~1 anomaly per 100 steps
+  #   auto_anomaly_cooldown: 100
+  #   auto_anomaly_dur_min: 20
+  #   auto_anomaly_dur_max: 100
+  #   auto_anomaly_mag_min: 1.5
+  #   auto_anomaly_mag_max: 5.0
 
   # Kafka topics
   input_topic: "gymnasium-action"
@@ -195,7 +228,6 @@ contextual_autoencoder_agent1:
     training_output: "cae1-training-results"
 
 rl_control_agent1:
-  environment: "Pendulum-v1"
   soct_agent_type: "KerasTD3-v0"
   soct_agent_config_path: "keras_td3.cfg"
   buffer_type: "ER-v0"

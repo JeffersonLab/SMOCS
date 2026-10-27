@@ -22,3 +22,8 @@ register(
     id='WaveGenerator-v0',
     entry_point='smocs.control_plane.wave_generator_env:WaveGeneratorEnv',
 )
+
+register(
+    id='UITF-v0',
+    entry_point='smocs.control_plane.uitf_env:EnvUITF',
+)
