@@ -31,6 +31,7 @@ class EnvUITF(gym.Env):
             bpm_terminate_atol: list[float],
             transient_time: float = 0.1,
             put_timeout: float = 5.0,
+            connection_timeout: float = 5.0,
             mode: str = 'delta',
             action_abs_min: list[float] | None = None,
             action_abs_max: list[float] | None = None,
@@ -57,6 +58,7 @@ class EnvUITF(gym.Env):
         - bpm_terminate_atol: absolute tolerance for the BPM termination condition
         - transient_time: time to wait (s) after setting an action PV before reading back
         - put_timeout: max time (s) to wait for the IOC to complete processing of all action puts before raising
+        - connection_timeout: max time (s) to wait for each PV to connect in connect() before raising
         - mode: 'delta' or 'abs' mode for actions
         - action_abs_min: absolute minimum setpoint for each action PV. Required in 'delta' mode; in 'abs' mode optional and must equal action_min
         - action_abs_max: absolute maximum setpoint for each action PV. Required in 'delta' mode; in 'abs' mode optional and must equal action_max
@@ -86,6 +88,7 @@ class EnvUITF(gym.Env):
 
         self.transient_time = transient_time
         self.put_timeout = put_timeout
+        self.connection_timeout = connection_timeout
         self.mode = mode
         
         assert self.mode in {'delta', 'abs'}, f'mode must be either "delta" or "abs" but got {self.mode} !!!'
@@ -140,11 +143,24 @@ class EnvUITF(gym.Env):
         import epics                    # not imported at the top to enable rl agent to instantiate the env object without requiring pyepics to be installed
         self.obs_pvs = [epics.PV(name) for name in self.obs_pv_names]
         self.action_pvs = [epics.PV(name) for name in self.action_pv_names]
+        # Fail fast on misspelled names or unreachable IOCs instead of reading None later
+        unconnected = [pv.pvname for pv in self.obs_pvs + self.action_pvs if not pv.wait_for_connection(timeout=self.connection_timeout)]
+        if unconnected:
+            raise ConnectionError(f'Could not connect to PVs within {self.connection_timeout}s: {unconnected}')
         self.is_connected = True
 
 
+    def _read_pvs(self, pvs) -> np.ndarray:
+        """Read the given PVs, raising if any reading is invalid so it never reaches the agent as NaN."""
+        values = np.array([pv.get() for pv in pvs], dtype='f4')        # a failed read (None) becomes NaN here
+        if not np.isfinite(values).all():
+            bad = [pv.pvname for pv, value in zip(pvs, values) if not np.isfinite(value)]
+            raise RuntimeError(f'Invalid readings (None/NaN/inf) from PVs: {bad}')
+        return values
+
+
     def _get_obs(self):
-        return np.array([pv.get() for pv in self.obs_pvs], dtype='f4')          # Assumptions: 1) We are reading ABSOLUTE BPM values. 2) Corrector PVs can be both read and set
+        return self._read_pvs(self.obs_pvs)          # Assumptions: 1) We are reading ABSOLUTE BPM values. 2) Corrector PVs can be both read and set
 
 
     def _apply_action(self) -> None:
@@ -160,7 +176,7 @@ class EnvUITF(gym.Env):
             time.sleep(0.01)
         # 3) Let the machine settle, then make sure the action PVs actually hold the requested values
         time.sleep(self.transient_time)
-        readback = np.array([pv.get() for pv in self.action_pvs], dtype='f4')
+        readback = self._read_pvs(self.action_pvs)
         if not np.allclose(self.action, readback, rtol=self.action_rtol, atol=self.action_atol):
             logging.error(f'Action PVs did not accept the requested values!!! self.action: {self.action}, Readback: {readback}')
 
@@ -189,7 +205,7 @@ class EnvUITF(gym.Env):
             logging.error(f'Observation PVs have changed BEFORE applying action!!! self.obs: {self.obs}, Current obs: {current_obs}')
         
         # Make sure absolute actions haven't changed
-        current_action = np.array([pv.get() for pv in self.action_pvs], dtype='f4')
+        current_action = self._read_pvs(self.action_pvs)
         if not np.allclose(self.action, current_action, rtol=self.action_rtol, atol=self.action_atol):
             logging.error(f'Action PVs have changed BEFORE applying action!!! self.action: {self.action}, Current action: {current_action}')
         
