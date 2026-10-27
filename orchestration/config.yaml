@@ -50,15 +50,16 @@ gymnasium:
     obs_rtol: [1e-5, 1e-5, 1e-5, 1e-5]
     obs_atol: [1e-8, 1e-8, 1e-8, 1e-8]
     action_pv_names: ['MLHK402H.BDL', 'MLHK402V.BDL']     # Are these used to both set and read corrector PVs?
-    action_design_settings: [5.0, 5.0]     # ideal current for corrector PVs - used to set the magnet current in an env.reset() 
     action_min: [0.0, 0.0]
     action_max: [0.1, 0.1]      # doesn't have to cover the whole range of the corrector PVs since mode is 'delta'. If mode = 'abs', it must cover the full range.
-    action_min_perturbation: [-0.1, -0.1]
-    action_max_perturbation: [0.1, 0.1]
     action_rtol: [1e-5, 1e-5]
     action_atol: [1e-8, 1e-8]
+    action_design_settings: [5.0, 5.0]     # ideal current for corrector PVs - used to set the magnet current in an env.reset()
+    action_min_perturbation: [-0.1, -0.1]
+    action_max_perturbation: [0.1, 0.1]
     bpm_pv_names: ['IPMk403.XPOS', 'IPMK403.YPOS']
     bpm_pv_refs: [0.0, 0.0]
+    bpm_terminate_atol: [0.1, 0.1]   # Absolute tolerance for BPM termination condition
     transient_time: 0.1
     mode: 'delta'
 
