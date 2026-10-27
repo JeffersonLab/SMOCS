@@ -101,7 +101,8 @@ class EnvUITF(gym.Env):
             assert np.all(self.action_abs_min <= self.action_abs_max), f'action_abs_min must be <= action_abs_max but got {self.action_abs_min} vs {self.action_abs_max}'
 
             # The agent outputs a change, so it must observe the current setpoints to know what it is changing
-            missing = [name for name in self.action_pv_names if name not in self.obs_pv_names]
+            obs_pv_names_set = set(obs_pv_names)
+            missing = [name for name in self.action_pv_names if name not in obs_pv_names_set]
             if missing:
                 raise ValueError(f"In delta mode, all action PVs must also be observation PVs so the agent sees the current setpoints. Missing: {missing}")
             abs_min, abs_max = self.action_abs_min, self.action_abs_max
@@ -155,10 +156,6 @@ class EnvUITF(gym.Env):
         return values
 
 
-    def _get_obs(self):
-        return self._read_pvs(self.obs_pvs)          # Assumptions: 1) We are reading ABSOLUTE BPM values. 2) Corrector PVs can be both read and set
-
-
     def _apply_action(self) -> None:
         # NOTE: self.action ALWAYS contains the absolute setpoints to be applied, even in 'delta' mode where the agent outputs changes relative to the last setpoints
         # 1) Parallel network dispatch: each PV's put_complete flips to True once its IOC finishes processing
@@ -187,7 +184,7 @@ class EnvUITF(gym.Env):
         self.step_count = 0
         self.action = self.action_design_settings + self.np_random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation)
         self._apply_action()
-        self.obs = self._get_obs()
+        self.obs = self._read_pvs(self.obs_pvs)         # Assumptions: 1) We are reading ABSOLUTE BPM values. 2) Corrector PVs can be both read and set
         return self.obs, {}
 
 
@@ -198,7 +195,7 @@ class EnvUITF(gym.Env):
         self.step_count += 1        # incremented first so error messages raised during this step report its number
 
         # Make sure obs PVs haven't changed
-        current_obs = self._get_obs()
+        current_obs = self._read_pvs(self.obs_pvs)
         if not np.allclose(self.obs, current_obs, rtol=self.obs_rtol, atol=self.obs_atol):  # Check if the current observation matches the previous one
             raise ValueError(f'[step {self.step_count}] Observation PVs have changed BEFORE applying action!!! self.obs: {self.obs}, Current obs: {current_obs}')
 
@@ -216,7 +213,7 @@ class EnvUITF(gym.Env):
             self.action = np.clip(action + self.action, self.action_abs_min, self.action_abs_max)
         self._apply_action()
 
-        self.obs = self._get_obs()
+        self.obs = self._read_pvs(self.obs_pvs)
         reward = -1 * np.sum((self.obs[self.bpm_idxs_in_obs] - self.bpm_pv_refs)**2).item()
 
         # set terminated to True if any BPM is outside the min/max specified in self.observation_space +/- bpm_terminate_atol (+ for min, - for max)
