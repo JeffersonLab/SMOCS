@@ -32,7 +32,7 @@ epics:
 gymnasium:
   # Environment settings
   render_mode: null  # Options: null, 'human', 'rgb_array'
-  max_episode_steps: null  # null uses environment default
+  max_episode_steps: 100  # Truncate episodes after this many steps; null uses the environment's registered default (none for the envs in this repo)
 
   # Environment selection: keep exactly one of the templates below uncommented.
   # env_kwargs are passed to the environment's __init__ via gym.make(environment, **env_kwargs).

@@ -1,5 +1,4 @@
 import time
-import logging
 import numpy as np
 import gymnasium as gym
 
@@ -155,7 +154,7 @@ class EnvUITF(gym.Env):
         values = np.array([pv.get() for pv in pvs], dtype='f4')        # a failed read (None) becomes NaN here
         if not np.isfinite(values).all():
             bad = [pv.pvname for pv, value in zip(pvs, values) if not np.isfinite(value)]
-            raise RuntimeError(f'Invalid readings (None/NaN/inf) from PVs: {bad}')
+            raise RuntimeError(f'[step {self.step_count}] Invalid readings (None/NaN/inf) from PVs: {bad}')
         return values
 
 
@@ -172,13 +171,13 @@ class EnvUITF(gym.Env):
         while not all(pv.put_complete for pv in self.action_pvs):
             if time.monotonic() > deadline:
                 pending = [pv.pvname for pv in self.action_pvs if not pv.put_complete]
-                raise TimeoutError(f'Action puts did not complete within {self.put_timeout}s: {pending}')
+                raise TimeoutError(f'[step {self.step_count}] Action puts did not complete within {self.put_timeout}s: {pending}')
             time.sleep(0.01)
         # 3) Let the machine settle, then make sure the action PVs actually hold the requested values
         time.sleep(self.transient_time)
         readback = self._read_pvs(self.action_pvs)
         if not np.allclose(self.action, readback, rtol=self.action_rtol, atol=self.action_atol):
-            logging.error(f'Action PVs did not accept the requested values!!! self.action: {self.action}, Readback: {readback}')
+            raise ValueError(f'[step {self.step_count}] Action PVs did not accept the requested values!!! self.action: {self.action}, Readback: {readback}')
 
 
     def reset(self, seed=None, options=None):
@@ -187,9 +186,9 @@ class EnvUITF(gym.Env):
         if not self.is_connected:
             self.connect()
         # Reset action to design settings with random uniform perturbation
+        self.step_count = 0
         self.action = self.action_design_settings + self.np_random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation)
         self._apply_action()
-        self.step_count = 0
         self.obs = self._get_obs()
         return self.obs, {}
 
@@ -198,16 +197,17 @@ class EnvUITF(gym.Env):
         """Take an action and observe the result."""
         if not self.is_connected:
             self.connect()
+        self.step_count += 1        # incremented first so error messages raised during this step report its number
 
         # Make sure obs PVs haven't changed
         current_obs = self._get_obs()
         if not np.allclose(self.obs, current_obs, rtol=self.obs_rtol, atol=self.obs_atol):  # Check if the current observation matches the previous one
-            logging.error(f'Observation PVs have changed BEFORE applying action!!! self.obs: {self.obs}, Current obs: {current_obs}')
-        
+            raise ValueError(f'[step {self.step_count}] Observation PVs have changed BEFORE applying action!!! self.obs: {self.obs}, Current obs: {current_obs}')
+
         # Make sure absolute actions haven't changed
         current_action = self._read_pvs(self.action_pvs)
         if not np.allclose(self.action, current_action, rtol=self.action_rtol, atol=self.action_atol):
-            logging.error(f'Action PVs have changed BEFORE applying action!!! self.action: {self.action}, Current action: {current_action}')
+            raise ValueError(f'[step {self.step_count}] Action PVs have changed BEFORE applying action!!! self.action: {self.action}, Current action: {current_action}')
         
         # NOTE: action can be delta, but self.action is always absolute
         action = np.clip(action, self.action_space.low, self.action_space.high)
@@ -219,14 +219,14 @@ class EnvUITF(gym.Env):
 
         self.obs = self._get_obs()
         reward = -1 * np.sum((self.obs[self.bpm_idxs_in_obs] - self.bpm_pv_refs)**2).item()
-        self.step_count += 1
 
         # set terminated to True if any BPM is outside the min/max specified in self.observation_space +/- bpm_terminate_atol (+ for min, - for max)
         terminated = (self.obs[self.bpm_idxs_in_obs] < self.observation_space.low[self.bpm_idxs_in_obs] + self.bpm_terminate_atol).any().item() or \
                      (self.observation_space.high[self.bpm_idxs_in_obs] - self.bpm_terminate_atol < self.obs[self.bpm_idxs_in_obs]).any().item()
         truncated = False
 
-        return self.obs, reward, terminated, truncated, {}
+        # applied_action is the absolute setpoint actually sent after clipping, which can differ from the agent's proposed action
+        return self.obs, reward, terminated, truncated, {'applied_action': self.action}
 
 
     def close(self):

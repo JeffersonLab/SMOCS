@@ -107,12 +107,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             if render_mode:
                 env_kwargs['render_mode'] = render_mode
 
-            env = gym.make(env_name, **env_kwargs)
-            
-            # Set max episode steps if specified
-            if max_episode_steps is not None:
-                env._max_episode_steps = max_episode_steps
-            
+            # gym.make wraps the env in a TimeLimit that truncates episodes after max_episode_steps
+            # (None falls back to the limit the environment was registered with, if any)
+            env = gym.make(env_name, max_episode_steps=max_episode_steps, **env_kwargs)
+
             logging.info(f"Created gymnasium environment: {env_name}")
             if render_mode:
                 logging.info(f"Render mode: {render_mode}")
