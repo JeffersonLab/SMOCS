@@ -100,13 +100,10 @@ class EnvUITF(gym.Env):
             self.action_abs_max = np.array(action_abs_max, dtype='f4')
             assert np.all(self.action_abs_min <= self.action_abs_max), f'action_abs_min must be <= action_abs_max but got {self.action_abs_min} vs {self.action_abs_max}'
 
-            self.action_idxs_in_obs = []
-            for name in self.action_pv_names:
-                try:
-                    idx = self.obs_pv_names.index(name)
-                except ValueError:
-                    raise ValueError(f"All action PVs must be part of the observation PVs when using delta mode. Missing: {name}")
-                self.action_idxs_in_obs.append(idx)
+            # The agent outputs a change, so it must observe the current setpoints to know what it is changing
+            missing = [name for name in self.action_pv_names if name not in self.obs_pv_names]
+            if missing:
+                raise ValueError(f"In delta mode, all action PVs must also be observation PVs so the agent sees the current setpoints. Missing: {missing}")
             abs_min, abs_max = self.action_abs_min, self.action_abs_max
         else:
             # action_space already bounds the absolute setpoint; action_abs_min/max are redundant but must match if given
@@ -163,6 +160,7 @@ class EnvUITF(gym.Env):
 
 
     def _apply_action(self) -> None:
+        # NOTE: self.action ALWAYS contains the absolute setpoints to be applied, even in 'delta' mode where the agent outputs changes relative to the last setpoints
         # 1) Parallel network dispatch: each PV's put_complete flips to True once its IOC finishes processing
         for pv, action_item in zip(self.action_pvs, self.action.tolist()):
             pv.put(action_item, use_complete=True)
@@ -209,12 +207,13 @@ class EnvUITF(gym.Env):
         if not np.allclose(self.action, current_action, rtol=self.action_rtol, atol=self.action_atol):
             raise ValueError(f'[step {self.step_count}] Action PVs have changed BEFORE applying action!!! self.action: {self.action}, Current action: {current_action}')
         
-        # NOTE: action can be delta, but self.action is always absolute
+        # NOTE: action CAN be delta, but self.action is ALWAYS absolute
         action = np.clip(action, self.action_space.low, self.action_space.high)
         if self.mode == 'abs':
             self.action = action
         else:
-            self.action = np.clip(action + self.obs[self.action_idxs_in_obs], self.action_abs_min, self.action_abs_max)
+            # Apply the delta to the last commanded setpoint (verified above to match the readback), so readback noise doesn't accumulate
+            self.action = np.clip(action + self.action, self.action_abs_min, self.action_abs_max)
         self._apply_action()
 
         self.obs = self._get_obs()
