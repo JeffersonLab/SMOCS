@@ -450,6 +450,9 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             self.total_steps += 1
             
             # Create SARSA tuple: (St, At, Rt, St+1, done)
+            if 'applied_action' in info:
+                logging.info(f'[GYM-STEP] Env overrode action "{action}" with applied_action {info["applied_action"]}')
+                action = info['applied_action']
             sarsa_data = self.create_sarsa_data(
                 current_state, action, reward, next_obs, done, truncated, info
             )

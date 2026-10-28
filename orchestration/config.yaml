@@ -64,6 +64,7 @@ gymnasium:
     put_timeout: 5.0   # Max seconds to wait for the IOC to finish processing all action puts before raising
     connection_timeout: 5.0   # Max seconds to wait for each PV to connect on the first reset() before raising
     mode: 'delta'
+    dry_run: true       # Must be set to false for the agent to actually move the correctors.
 
   # --- SCORE-IndustryParticleAccelerator-v0 (smocs/control_plane/proxy_industry_env.py) ---
   # environment: "SCORE-IndustryParticleAccelerator-v0"

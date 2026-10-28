@@ -34,6 +34,7 @@ class EnvUITF(gym.Env):
             mode: str = 'delta',
             action_abs_min: list[float] | None = None,
             action_abs_max: list[float] | None = None,
+            dry_run: bool = False
     ) -> None:
         """
         Initialize the UITF environment.
@@ -61,6 +62,7 @@ class EnvUITF(gym.Env):
         - mode: 'delta' or 'abs' mode for actions
         - action_abs_min: absolute minimum setpoint for each action PV. Required in 'delta' mode; in 'abs' mode optional and must equal action_min
         - action_abs_max: absolute maximum setpoint for each action PV. Required in 'delta' mode; in 'abs' mode optional and must equal action_max
+        - dry_run: if True, nothing is ever written to the PVs: reset() keeps the current setpoints and step() ignores the agent's action.
         """
         super().__init__()
 
@@ -89,6 +91,7 @@ class EnvUITF(gym.Env):
         self.put_timeout = put_timeout
         self.connection_timeout = connection_timeout
         self.mode = mode
+        self.dry_run = dry_run
         
         assert self.mode in {'delta', 'abs'}, f'mode must be either "delta" or "abs" but got {self.mode} !!!'
 
@@ -180,10 +183,13 @@ class EnvUITF(gym.Env):
         super().reset(seed=seed)
         if not self.is_connected:
             self.connect()
-        # Reset action to design settings with random uniform perturbation
         self.step_count = 0
-        self.action = self.action_design_settings + self.np_random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation)
-        self._apply_action()
+        if self.dry_run:
+            self.action = self._read_pvs(self.action_pvs)
+        else:
+            # Reset action to design settings with random uniform perturbation
+            self.action = self.action_design_settings + self.np_random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation)
+            self._apply_action()
         self.obs = self._read_pvs(self.obs_pvs)         # Assumptions: 1) We are reading ABSOLUTE BPM values. 2) Corrector PVs can be both read and set
         return self.obs, {}
 
@@ -203,15 +209,30 @@ class EnvUITF(gym.Env):
         current_action = self._read_pvs(self.action_pvs)
         if not np.allclose(self.action, current_action, rtol=self.action_rtol, atol=self.action_atol):
             raise ValueError(f'[step {self.step_count}] Action PVs have changed BEFORE applying action!!! self.action: {self.action}, Current action: {current_action}')
-        
+
+        info = {}
         # NOTE: action CAN be delta, but self.action is ALWAYS absolute
-        action = np.clip(action, self.action_space.low, self.action_space.high)
-        if self.mode == 'abs':
-            self.action = action
+        if self.dry_run:
+            self.action = current_action
+            if self.mode == 'abs':
+                info['applied_action'] = self.action
+            else:
+                info['applied_action'] = np.zeros_like(self.action, dtype='f4')
         else:
-            # Apply the delta to the last commanded setpoint (verified above to match the readback), so readback noise doesn't accumulate
-            self.action = np.clip(action + self.action, self.action_abs_min, self.action_abs_max)
-        self._apply_action()
+            clipped_action = np.clip(action, self.action_space.low, self.action_space.high)     # This is enough clipping in 'abs' mode, delta mode will be clipped later against absolute limits
+            if self.mode == 'abs':
+                self.action = clipped_action
+                if not np.array_equal(clipped_action, action):
+                    # Change in absolute action due to clipping, hence the env is overriding the requested absolute action ==> record it in info
+                    info['applied_action'] = clipped_action
+            else:
+                old_abs_action = self.action
+                self.action = np.clip(clipped_action + old_abs_action, self.action_abs_min, self.action_abs_max)
+                # if any clipping had any effect, record the applied action in info
+                if not np.array_equal(self.action, action + old_abs_action):
+                    # Change in OVERALL absolute action due to clipping, hence the env is overriding the requested delta action ==> record the effective delta action in info
+                    info['applied_action'] = self.action - old_abs_action
+            self._apply_action()
 
         self.obs = self._read_pvs(self.obs_pvs)
         reward = -1 * np.sum((self.obs[self.bpm_idxs_in_obs] - self.bpm_pv_refs)**2).item()
@@ -221,8 +242,7 @@ class EnvUITF(gym.Env):
                      (self.observation_space.high[self.bpm_idxs_in_obs] - self.bpm_terminate_atol < self.obs[self.bpm_idxs_in_obs]).any().item()
         truncated = False
 
-        # applied_action is the absolute setpoint actually sent after clipping, which can differ from the agent's proposed action
-        return self.obs, reward, terminated, truncated, {'applied_action': self.action}
+        return self.obs, reward, terminated, truncated, info
 
 
     def close(self):
