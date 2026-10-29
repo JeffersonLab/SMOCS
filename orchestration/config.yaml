@@ -97,11 +97,11 @@ gymnasium:
 
   # Operation mode
   # Set these to match the environment selected above:
-  #   UITF-v0:                              blocking_mode: true,  invalid_action_strategy: "clip"
-  #   SCORE-IndustryParticleAccelerator-v0: blocking_mode: true,  invalid_action_strategy: "clip"
-  #   WaveGenerator-v0:                     blocking_mode: false, invalid_action_strategy: "default"
-  blocking_mode: true  # true = wait for Kafka actions (envs driven by an RL agent), false = step with default actions when none arrive (envs that run without an agent, e.g. WaveGenerator)
-  default_action_strategy: "zero"  # Options: 'random', 'zero'
+  #   UITF-v0:                              blocking_mode: true,  default_action_strategy: "noop", invalid_action_strategy: "clip"
+  #   SCORE-IndustryParticleAccelerator-v0: blocking_mode: true,  default_action_strategy: "zero", invalid_action_strategy: "clip"
+  #   WaveGenerator-v0:                     blocking_mode: false, default_action_strategy: "zero", invalid_action_strategy: "default"
+  blocking_mode: true  # true = wait for Kafka actions, false = step with default actions when none arrive
+  default_action_strategy: "noop"  # Options: 'random', 'zero', 'noop'. 'noop' asks the env what "do nothing" means (UITF 'abs' mode: hold the current setpoint, where zeros would drive the correctors to their lower limit); only for envs that define noop_action() (currently UITF), otherwise the controller fails at startup
   invalid_action_strategy: "clip"  # What to do with an out-of-bounds action. 'default': replace it with the default action (safe for command-like actions, e.g. WaveGenerator). 'clip': clip it to the nearest valid action (continuous controls, e.g. UITF). Malformed actions (wrong shape, NaN) always get the default action
   step_delay: 0.1  # Delay in seconds between steps (10 steps/sec)
   reset_on_start: true  # Reset environment on startup

@@ -150,6 +150,13 @@ class EnvUITF(gym.Env):
         self.is_connected = True
 
 
+    def noop_action(self) -> np.ndarray:
+        """Action that leaves the machine unchanged: zero change in 'delta' mode, the current setpoint in 'abs' mode."""
+        if self.mode == 'abs':
+            return self.action.copy()       # self.action always holds the last absolute setpoint (set in reset())
+        return np.zeros(self.action_space.shape, dtype='f4')
+
+
     def _read_pvs(self, pvs) -> np.ndarray:
         """Read the given PVs, raising if any reading is invalid so it never reaches the agent as NaN."""
         values = np.array([pv.get() for pv in pvs], dtype='f4')        # a failed read (None) becomes NaN here
@@ -188,7 +195,8 @@ class EnvUITF(gym.Env):
             self.action = self._read_pvs(self.action_pvs)
         else:
             # Reset action to design settings with random uniform perturbation
-            self.action = self.action_design_settings + self.np_random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation)
+            # np_random.uniform returns float64, so cast to keep self.action f4 like everything else in the env
+            self.action = self.action_design_settings + self.np_random.uniform(low=self.action_min_perturbation, high=self.action_max_perturbation).astype('f4')
             self._apply_action()
         self.obs = self._read_pvs(self.obs_pvs)         # Assumptions: 1) We are reading ABSOLUTE BPM values. 2) Corrector PVs can be both read and set
         return self.obs, {}

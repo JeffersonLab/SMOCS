@@ -71,7 +71,11 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         
         # Initialize gymnasium environment
         self.env = self._create_environment()
-        
+        # Fail at startup rather than at the first default action, which may come much later (e.g. on an invalid action)
+        if self.default_action_strategy == 'noop' and not callable(getattr(self.env.unwrapped, 'noop_action', None)):
+            raise ValueError(f"default_action_strategy 'noop' requires the environment '{self.gym_config['environment']}' "
+                             f"to define a noop_action() method")
+
         # Environment state
         self.current_obs = None
         self.episode_step = 0
@@ -144,6 +148,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             else:
                 # Discrete action space
                 return 0
+        elif self.default_action_strategy == 'noop':
+            # The env defines what "do nothing" means (e.g. hold the current setpoint in UITF 'abs' mode);
+            # __init__ already checked that it provides noop_action()
+            return self.env.unwrapped.noop_action()
         else:
             raise ValueError(f"Unknown default action strategy: {self.default_action_strategy}")
 
