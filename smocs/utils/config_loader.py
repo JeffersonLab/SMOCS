@@ -66,6 +66,9 @@ class ConfigLoader:
     def get_gymnasium_default_action_strategy(self) -> str:
         return self.config.get('gymnasium', {}).get('default_action_strategy', 'random')
     
+    def get_gymnasium_invalid_action_strategy(self) -> str:
+        return self.config.get('gymnasium', {}).get('invalid_action_strategy', 'default')
+
     def get_gymnasium_step_delay(self) -> float:
         return self.config.get('gymnasium', {}).get('step_delay', 0.0)
     
@@ -102,6 +105,7 @@ class ConfigLoader:
             'output_topics': self.get_gymnasium_output_topics(),  # Changed!
             'blocking_mode': self.get_gymnasium_blocking_mode(),
             'default_action_strategy': self.get_gymnasium_default_action_strategy(),
+            'invalid_action_strategy': self.get_gymnasium_invalid_action_strategy(),
             'step_delay': self.get_gymnasium_step_delay(),
             'reset_on_start': self.get_gymnasium_reset_on_start(),
             'max_episode_steps': self.get_gymnasium_max_episode_steps(),

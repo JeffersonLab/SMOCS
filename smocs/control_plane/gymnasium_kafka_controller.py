@@ -59,6 +59,9 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         # Store configuration
         self.blocking_mode = self.gym_config['blocking_mode']
         self.default_action_strategy = self.gym_config['default_action_strategy']
+        self.invalid_action_strategy = self.gym_config['invalid_action_strategy']
+        if self.invalid_action_strategy not in ('default', 'clip'):
+            raise ValueError(f"Unknown invalid action strategy: {self.invalid_action_strategy}")
         self.step_delay = self.gym_config['step_delay']
         self.reset_on_start = self.gym_config['reset_on_start']
         self.env_kwargs = self.gym_config.get('env_kwargs', {})
@@ -86,7 +89,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
         logging.info(f"    Decomposed: {self.output_topics['decomposed']}")
         logging.info(f"  Blocking mode: {self.blocking_mode}")
         logging.info(f"  Default action strategy: {self.default_action_strategy}")
+        logging.info(f"  Invalid action strategy: {self.invalid_action_strategy}")
         logging.info(f"  Step delay: {self.step_delay}s")
+        # Only some envs (e.g. UITF-v0) support dry_run; gymnasium 1.x wrappers don't forward attributes, hence unwrapped
+        logging.info(f"  Dry run: {getattr(self.env.unwrapped, 'dry_run', False)}")
         logging.info(f"  Action space: {self.env.action_space}")
         logging.info(f"  Observation space: {self.env.observation_space}")
     
@@ -140,6 +146,21 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
                 return 0
         else:
             raise ValueError(f"Unknown default action strategy: {self.default_action_strategy}")
+
+    def enforce_action_space(self, action):
+        """
+        Clip an action to the nearest valid one in the env's action space.
+
+        Args:
+            action: Action proposed by the agent
+
+        Returns:
+            The clipped action, or None if it can't be clipped (non-Box space, wrong shape, NaN/inf)
+        """
+        space = self.env.action_space
+        if isinstance(space, gym.spaces.Box) and np.shape(action) == space.shape and np.all(np.isfinite(action)):
+            return np.clip(action, space.low, space.high).astype(space.dtype)
+        return None
     
     def parse_action(self, message: str):
         """
@@ -180,6 +201,13 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             # Validate action is in action space
             if not self.env.action_space.contains(action):
                 logging.warning(f"Action {action} not in action space {self.env.action_space}")
+                if self.invalid_action_strategy == 'clip':
+                    # Clip to the nearest valid action rather than using the default one, since the default action is
+                    # not always safe (e.g. zeros in an absolute-setpoint env move the hardware to its limit)
+                    clipped_action = self.enforce_action_space(action)
+                    if clipped_action is not None:
+                        logging.warning(f"Clipping action to the action space bounds: {clipped_action}")
+                        return clipped_action
                 logging.warning("Action validation failed — using default action (zero/NOOP) instead. "
                                 "Ensure all parameters are within bounds and use the channels format: "
                                 '{"channels": {"action": [...]}, "timestamp": ...}')

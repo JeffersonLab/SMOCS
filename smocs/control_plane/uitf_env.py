@@ -196,6 +196,7 @@ class EnvUITF(gym.Env):
 
     def step(self, action: np.ndarray):
         """Take an action and observe the result."""
+        action = np.asarray(action, dtype='f4')     # match the f4 setpoints so the exact clipping checks below aren't fooled by float64 inputs
         if not self.is_connected:
             self.connect()
         self.step_count += 1        # incremented first so error messages raised during this step report its number
