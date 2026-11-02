@@ -487,8 +487,10 @@ class KafkaGymWrapper(KafkaStreamingProcessBase):
             
             # Create SARSA tuple: (St, At, Rt, St+1, done)
             if 'applied_action' in info:
-                logging.info(f'[GYM-STEP] Env overrode action "{action}" with applied_action {info["applied_action"]}')
-                action = info['applied_action']
+                logging.info(
+                    f'[GYM-STEP] Env overrode action "{action}" with applied_action {info["applied_action"]}.\n'
+                    f'The action in the SARSA tuple will reflect the former as returned by the parse_action method.'
+                )
             sarsa_data = self.create_sarsa_data(
                 current_state, action, reward, next_obs, done, truncated, info
             )
